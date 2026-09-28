@@ -1,0 +1,35 @@
+[versions]
+agp = "8.12.3"
+kotlin = "2.3.20"
+compose-activity = "1.13.0"
+kotlinx-coroutines = "1.10.2"
+kotlinx-serialization-json = "1.7.3"
+room = "2.8.4"
+sdk = "0.1.0"
+
+[libraries]
+compose-activity = { module = "androidx.activity:activity-compose", version.ref = "compose-activity" }
+junit = { module = "junit:junit", version = "4.13.2" }
+kotlinx-coroutines = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "kotlinx-coroutines" }
+kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinx-coroutines" }
+kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinx-serialization-json" }
+androidx-room-runtime = { module = "androidx.room:room-runtime", version.ref = "room" }
+androidx-room-ktx = { module = "androidx.room:room-ktx", version.ref = "room" }
+androidx-room-compiler = { module = "androidx.room:room-compiler", version.ref = "room" }
+kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
+# Consumed from the included ../light-sdk build via dependencySubstitution;
+# versions must match light-sdk/gradle.properties sdkGroup/sdkVersion.
+sdk-ui = { module = "com.thelightphone:sdk-ui", version.ref = "sdk" }
+sdk-client = { module = "com.thelightphone:sdk-client", version.ref = "sdk" }
+sdk-server = { module = "com.thelightphone:sdk-server", version.ref = "sdk" }
+sdk-shared = { module = "com.thelightphone:sdk-shared", version.ref = "sdk" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+android-library = { id = "com.android.library", version.ref = "agp" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+ksp = { id = "com.google.devtools.ksp", version = "2.3.6" }
+# Resolved from the included ../light-sdk build (no version).
+light-sdk = { id = "com.thelightphone.light-sdk" }
