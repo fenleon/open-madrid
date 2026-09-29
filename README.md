@@ -38,6 +38,7 @@ Almost every existing route to iMessage is closed in some way:
 
 | Project | What it is | The catch |
 |---|---|---|
+| Open-Madrid | Kotlin open-source implementation | None |
 | rustpush | The maintained engine (Rust) | SSPL license |
 | pypush | The original Python PoC | SSPL license |
 | imessagego | Go implementation | AGPL (the only ordinary open-source license in the space) |
@@ -45,7 +46,7 @@ Almost every existing route to iMessage is closed in some way:
 | open-absinthe | The validation-data layer | Closed source |
 | OpenBubbles hosted | A hosted service | Someone else's server sees your messages |
 
-**Open Madrid's aim:** a permissively licensed (Apache-2.0), dependency-light, fully readable implementation of the protocol. Facts about the protocol live in a spec ([docs/imessage-protocol-spec.md](docs/imessage-protocol-spec.md)); every fact cites its source. Code is written from the spec, never from the other projects.
+Open Madrid's is a permissively licensed (Apache-2.0), dependency-light, fully readable implementation of the protocol. Facts about the protocol live in a spec ([docs/imessage-protocol-spec.md](docs/imessage-protocol-spec.md)); every fact cites its source. Code is written from the spec, never from the other projects.
 
 ## What is validated
 
@@ -88,7 +89,7 @@ Why: it keeps this code fully open, acceptable to F-Droid and other distribution
 
 ## The Apple-material rule
 
-No Apple-derived code or binary ships in this repository. This includes the IMDAppleServices framework, not Apple's FairPlay identity. The bundled identity under
+No Apple-derived code or binary ships in this repository. This includes the IMDAppleServices framework and Apple's FairPlay identity. The bundled identity under
 `registration/src/main/resources/imessage/fairplay/` is a **synthetic placeholder** (generated, self-signed, for tests only). Live activation requires Apple's real FairPlay identity and registration framework, which each user stages themselves.
 
 ## Building
