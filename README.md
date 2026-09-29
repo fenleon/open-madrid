@@ -1,5 +1,34 @@
 # Open Madrid
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="art/wordmark-alpha-white.png">
+    <img src="art/wordmark-alpha-black.png" alt="Open Madrid" width="45%">
+  </picture>
+</p>
+<p align="center">
+  <a href="https://ko-fi.com/fenleon">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="art/coffee-hand-filled-alpha-white-steam.png">
+      <img src="art/coffee-hand-filled-alpha-white.png" alt="Coffee hand" height="50" style="vertical-align: middle;">
+    </picture>
+  </a>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="art/buy-me-a-coffee-alpha-white.png">
+    <img src="art/buy-me-a-coffee-alpha-black.png" alt="Buy me a coffee" height="40" style="vertical-align: middle;">
+  </picture>
+  <a href="https://ko-fi.com/fenleon">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="art/ok-hand-filled-alpha-white.png">
+      <img src="art/ok-hand-filled-alpha-white.png" alt="OK hand" height="50" style="vertical-align: middle;">
+    </picture>
+  </a>
+</p>
+<p align="center">
+  <a href="https://github.com/sponsors/fenleon"><strong>GitHub Sponsors</strong></a> ·
+  <a href="https://ko-fi.com/fenleon"><strong>Ko-fi</strong></a>
+</p>
+
 **An open implementation of Apple's madrid protocol — better known as iMessage.**
 
 "Madrid" is Apple's internal codename for iMessage. This repository is a clean-room, plain-old-
