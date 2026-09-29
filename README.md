@@ -43,8 +43,7 @@ Almost every existing route to iMessage is closed in some way:
 | pypush | The original Python PoC | SSPL license |
 | imessagego | Go implementation | AGPL (the only ordinary open-source license in the space) |
 | BlueBubbles | A working client | Needs a Mac running 24/7 to relay and decrypt |
-| open-absinthe | The validation-data layer | Closed source |
-| OpenBubbles hosted | A hosted service | Someone else's server sees your messages |
+| OpenBubbles | The validation-data layer | Depends on closed-source open-absinthe|
 
 Open Madrid's is a permissively licensed (Apache-2.0), dependency-light, fully readable implementation of the protocol. Facts about the protocol live in a spec ([docs/imessage-protocol-spec.md](docs/imessage-protocol-spec.md)); every fact cites its source. Code is written from the spec, never from the other projects.
 
