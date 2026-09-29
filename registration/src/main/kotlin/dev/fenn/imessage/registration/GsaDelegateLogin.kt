@@ -164,9 +164,32 @@ class GsaDelegateLoginClient(
         val encoded = XmlPlist.encode(body)
         val response = http.post(endpoint, headers, encoded, CONTENT_TYPE)
         if (response.status != 200) {
-            throw GsaLoginException("iCloud sign-in POST $endpoint → HTTP ${response.status}")
+            throw GsaLoginException(
+                "iCloud sign-in POST $endpoint → HTTP ${response.status}${errorDetail(response.body)}",
+            )
         }
         return parseResponse(response.body)
+    }
+
+    /** Top-level error-shape facts only (keys, integer codes, error strings) — never token values. */
+    private fun errorDetail(bytes: ByteArray): String {
+        val parsed = try {
+            Plist.parse(bytes)
+        } catch (_: Exception) {
+            return ""
+        }
+        val dict = stringKeyedDictOrNull(parsed) ?: return " (${typeName(parsed)})"
+        val scalars = dict.entries
+            .mapNotNull { (k, v) ->
+                when {
+                    v is Int || v is Long -> "$k=$v"
+                    v is String && k !in setOf("dsid", "auth-token", "adsid") -> "$k=$v"
+                    v is Map<*, *> -> "$k keys=${stringKeyedDictOrNull(v)?.keys ?: v.keys}"
+                    else -> null
+                }
+            }
+            .joinToString(", ")
+        return " — body: $scalars"
     }
 
     private fun parseResponse(bytes: ByteArray): IcloudSignInResponse {

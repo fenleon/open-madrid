@@ -181,14 +181,27 @@ class GsaLoginChain(
         val spd = complete.spd?.let { GsaSpd.parse(GsaSpdDecryptor.decrypt(it, proof.k)) }
         return when (val secondaryAuth = complete.secondaryAuth) {
             null -> {
-                val result = GsaLoginResult.Authenticated(spd = spd, pet = complete.pet)
+                // The PET rides the response headers when Apple sends them; on the post-2FA
+                // SRP re-login it arrives instead inside the spd token map under the PET
+                // service id (observed live — the header was absent on that path). A no-2FA
+                // login's spd carries only com.apple.gs.appleid.auth and no PET.
+                val pet = complete.pet
+                    ?: spd?.tokens[PET_SERVICE_ID]?.let {
+                        GsaPet(
+                            it.token,
+                            it.expiresAtEpochMs
+                                ?: (clock() + GsaTokenHeaders.PET_DEFAULT_EXPIRY_SECONDS * 1000),
+                        )
+                    }
+                logEvent("gsa: pet=${complete.pet != null} spdToken=${pet != null} tokens=${spd?.tokens?.keys}")
+                val result = GsaLoginResult.Authenticated(spd = spd, pet = pet)
                 credentialStore?.save(
                     GsaPersistedCredentials(
                         username = username,
                         passwordHash = passwordHash,
                         adsid = spd?.adsid,
-                        petToken = complete.pet?.token,
-                        petExpiresAtEpochMs = complete.pet?.expiresAtEpochMs,
+                        petToken = pet?.token,
+                        petExpiresAtEpochMs = pet?.expiresAtEpochMs,
                     ),
                 )
                 result
@@ -344,5 +357,8 @@ class GsaLoginChain(
     companion object {
         const val GSA_STATUS_SECONDARY = GsaStatus.AU_SECONDARY_AUTH
         const val GSA_STATUS_TRUSTED = GsaStatus.AU_TRUSTED_DEVICE
+
+        /** The spd token-map service id under which the PET is delivered (§1.5 PET). */
+        const val PET_SERVICE_ID = "com.apple.gs.idms.pet"
     }
 }
