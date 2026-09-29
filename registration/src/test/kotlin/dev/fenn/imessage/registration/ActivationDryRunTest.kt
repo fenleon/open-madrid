@@ -239,6 +239,10 @@ class ActivationDryRunTest {
         assertEquals(1, env.gsaInitCount)
         assertEquals(1, env.gsaCompleteCount)
 
+        // The push fires when the login surfaces the 2FA prompt (the caller's job — the
+        // UI shows ENTER CODE only after the devices were pinged); completeSecondaryAuth
+        // validates only (a second trigger invalidates the first code — observed live).
+        chain.triggerTrustedDevicePush(required.variant, required.identityToken!!)
         val authenticated = chain.completeSecondaryAuth(
             username = username,
             passwordHash = passwordHash,

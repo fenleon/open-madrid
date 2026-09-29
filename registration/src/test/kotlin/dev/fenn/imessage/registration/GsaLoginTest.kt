@@ -216,12 +216,13 @@ class GsaLoginTest {
     private fun completeRequest() = GsaCompleteRequest("user@example.com", byteArrayOf(7), "c", emptyMap())
 
     private fun okComplete(au: String? = null): ByteArray {
+        val status = linkedMapOf<String, Any?>("ec" to 0L)
+        au?.let { status["au"] = it }
         val response = linkedMapOf<String, Any?>(
             "M2" to byteArrayOf(8),
             "spd" to byteArrayOf(9),
-            "Status" to linkedMapOf<String, Any?>("ec" to 0L),
+            "Status" to status,
         )
-        au?.let { response["au"] = it }
         return XmlPlist.encode(mapOf("Response" to response))
     }
 }

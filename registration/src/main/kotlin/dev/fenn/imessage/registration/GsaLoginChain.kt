@@ -208,6 +208,16 @@ class GsaLoginChain(
     suspend fun trustedPhoneNumbers(identityToken: String): GsaAuthExtras =
         twoFactorClient().trustedPhoneNumbers(identityToken)
 
+    /** Push the code to the trusted devices — must run BEFORE prompting for the code (the
+     *  push itself is what makes the code appear; reference: apple-private-apis
+     *  `send_2fa_to_devices`). No-op for the SMS variant (its SMS is requested on submit).
+     *  Triggering twice before one validate invalidates the outstanding code (observed live). */
+    suspend fun triggerTrustedDevicePush(variant: String, identityToken: String) {
+        if (variant == GsaStatus.AU_TRUSTED_DEVICE) {
+            twoFactorClient().triggerTrustedDevice(identityToken)
+        }
+    }
+
     /**
      * §1.5: resolve secondary auth with [securityCode], then — the recorded behavior — run the
      * full SRP login a SECOND time, which then completes as logged-in.
@@ -233,7 +243,9 @@ class GsaLoginChain(
                 twoFactor.submitSmsCode(identityToken, phoneId, securityCode, clock())
             }
             GsaStatus.AU_TRUSTED_DEVICE -> {
-                twoFactor.triggerTrustedDevice(identityToken)
+                // The push already fired when the login surfaced the 2FA prompt
+                // (triggerTrustedDevicePush) — triggering again would invalidate
+                // the first code and re-prompt the devices (observed live).
                 twoFactor.submitTrustedDeviceCode(identityToken, securityCode, clock())
             }
             else -> throw GsaLoginException(
@@ -266,7 +278,9 @@ class GsaLoginChain(
      * the §1.1 blob (the chunk-C exchange mints it — caller-supplied here). [timezone] defaults
      * to the recorded value (§1.5 C59); [clientInfo] defaults to the recorded bracketed AOSKit
      * form when the device config is wired ([GsaHeaderConfig.signInClientInfo]), falling back to
-     * the bare recorded AOSKit inner component.
+     * the bare recorded AOSKit inner component. [anisette] must be FRESHLY minted for this
+     * call — the one-time OTP headers spent on the GSA hops are refused here (observed live;
+     * the reference client mints per request).
      */
     suspend fun idsDelegateCredentials(
         username: String,

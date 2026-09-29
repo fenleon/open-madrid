@@ -411,12 +411,13 @@ $inner</Protocol>""".toByteArray()
         )
         require(expectedM1.contentEquals(m1)) { "dry-run fake: client M1 did not verify (§1.5 SRP)" }
         val computedM2 = sha256(s.aPublic + m1 + serverK)
+        val status = linkedMapOf<String, Any?>("ec" to 0L)
+        if (gsaCompleteCount == 1) status["au"] = GsaStatus.AU_TRUSTED_DEVICE
         val response = linkedMapOf<String, Any?>(
             "M2" to computedM2,
             "spd" to encryptSpd(serverK),
-            "Status" to linkedMapOf<String, Any?>("ec" to 0L),
+            "Status" to status,
         )
-        if (gsaCompleteCount == 1) response["au"] = GsaStatus.AU_TRUSTED_DEVICE
         petCounter++
         return IdsHttpResponse(
             200,

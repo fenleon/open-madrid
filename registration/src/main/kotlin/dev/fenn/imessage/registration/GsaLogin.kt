@@ -37,6 +37,9 @@ class GsaLoginException(message: String, cause: Throwable? = null) : Exception(m
 data class GsaStatus(
     val ec: Int,
     val em: String?,
+    /** Apple returns `au` INSIDE the Status dict (reference: apple-private-apis reads
+     *  `status.get("au")` — the top-level Response dict has no `au`). */
+    val au: String? = null,
 ) {
     companion object {
         const val EC_OK = 0
@@ -143,7 +146,7 @@ class GsaLoginClient(
         val response = post(XmlPlist.encode(request.toBody()), request.headers)
         val dict = responseDict(response, "complete")
         val status = statusOf(dict, "complete")
-        val secondaryAuth = dict["au"] as? String
+        val secondaryAuth = status.au
         if (secondaryAuth == null && status.ec != GsaStatus.EC_OK) {
             throw GsaLoginException("GSA complete failed: ec=${status.ec} em=${status.em ?: "-"}")
         }
@@ -190,6 +193,7 @@ class GsaLoginClient(
             ec = integerOrNull(status["ec"])
                 ?: throw GsaLoginException("GSA $step 'Status' has no integer 'ec' (§1.5)"),
             em = status["em"] as? String,
+            au = status["au"] as? String,
         )
     }
 

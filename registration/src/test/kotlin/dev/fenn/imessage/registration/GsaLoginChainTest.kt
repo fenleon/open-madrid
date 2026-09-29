@@ -143,14 +143,17 @@ class GsaLoginChainTest {
     }
 
     @Test
-    fun `trusted-device secondary auth triggers then validates with the security-code header`() = runBlocking {
+    fun `trusted-device secondary auth pushes on the chain then validates with the security-code header`() = runBlocking {
         val server = FakeGsaServer(passwordHash, secondaryAuth = GsaStatus.AU_TRUSTED_DEVICE)
         val chain = chain(server)
 
         val required = chain.login(username, password) as GsaLoginResult.SecondaryAuthRequired
         assertEquals(GsaStatus.AU_TRUSTED_DEVICE, required.variant)
 
+        // The push is the caller's job (production: right after SecondaryAuthRequired);
+        // completeSecondaryAuth validates only — a second trigger invalidates the code.
         server.secondaryAuth = null
+        chain.triggerTrustedDevicePush(GsaStatus.AU_TRUSTED_DEVICE, required.identityToken!!)
         val result = chain.completeSecondaryAuth(
             username = username,
             passwordHash = passwordHash,
@@ -383,12 +386,13 @@ private class FakeGsaServer(
         } else {
             computedM2
         }
+        val status = linkedMapOf<String, Any?>("ec" to 0L)
+        secondaryAuth?.let { status["au"] = it }
         val response = linkedMapOf<String, Any?>(
             "M2" to m2,
             "spd" to encryptSpd(serverK),
-            "Status" to linkedMapOf<String, Any?>("ec" to 0L),
+            "Status" to status,
         )
-        secondaryAuth?.let { response["au"] = it }
         petCounter++
         return IdsHttpResponse(
             200,
