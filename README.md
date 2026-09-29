@@ -34,7 +34,7 @@ mock placeholder and no actual functionality, everything here is readable, and l
 
 ## Why another project?
 
-Almost every existing route to iMessage is closed in some way:
+Unlike other projects, Open Madrid's is a permissively licensed (Apache-2.0), dependency-light, fully readable implementation of the protocol. Facts about the protocol live in a spec ([docs/imessage-protocol-spec.md](docs/imessage-protocol-spec.md)). Almost every existing route to iMessage is closed in some way:
 
 | Project | What it is | The catch |
 |---|---|---|
@@ -44,8 +44,6 @@ Almost every existing route to iMessage is closed in some way:
 | imessagego | Go implementation | AGPL (the only ordinary open-source license in the space) |
 | BlueBubbles | A working client | Needs a Mac running 24/7 to relay and decrypt |
 | OpenBubbles | The validation-data layer | Depends on closed-source open-absinthe|
-
-Open Madrid's is a permissively licensed (Apache-2.0), dependency-light, fully readable implementation of the protocol. Facts about the protocol live in a spec ([docs/imessage-protocol-spec.md](docs/imessage-protocol-spec.md)); every fact cites its source. Code is written from the spec, never from the other projects.
 
 ## What is validated
 
