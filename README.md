@@ -59,8 +59,12 @@ Unlike other projects, Open Madrid's is a permissively licensed (Apache-2.0), de
   test).
 - **The protocol around it is proven live** by this project's private sibling implementation:
   a working device-identity chain (Apple's validation endpoint, key establishment, the 645-byte
-  validation blob), SRP login with Apple's GSA endpoints, and the decrypted response parsing —
-  on real accounts. Those findings are folded into the spec here.
+  validation blob), and — as of 2026-09-29 — the full GSA login against Apple's live endpoints
+  with a real Apple ID: SRP, trusted-device 2FA, the PET delivery (both live-confirmed
+  channels), and the delegate sign-in request shape. Those findings are folded into the spec
+  here (rev 25). The sign-in itself is currently refused by Apple with
+  `ICLOUD_UNSUPPORTED_DEVICE` (a device-identity-bound iCloud-activation limit) — recorded as
+  the spec's first documented live refusal, not a protocol gap.
 
 ## What is not validated (yet)
 
