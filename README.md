@@ -9,14 +9,13 @@ Unlike [open-absinthe](https://github.com/JJTech0130/open-absinthe), which is a 
 Validated:
 
 - The parsers handle real Apple bytes. The actual 405-entry IDS bag and 65-entry APNs bag, captured from a registered device, are committed as test fixtures and decoded with exact-value assertions.
+- The registration chain ran live against Apple (2026-10-02→04, spec rev 26): Albert activation, the packed APNs courier, the full GSA sign-in (SRP, trusted-device 2FA, PET delivery, postdata), then IDS authenticate and register — both green, `mailto:` handle active. The earlier 409 refusals turned out to be Apple's validation-stamp replay guard (one mint = one device record), documented in the spec.
 - Two live unauthenticated probes against Apple succeeded: both bag endpoints return plists this stack parses, and certificate pinning validates Apple's real TLS chains. A drift check ships with the repo (`:engine:runProbe`).
-- The courier's auth model is settled: the TLS handshake succeeds, then the server demands the Albert client certificate (a TLS 1.3 post-handshake `certificate_required` alert).
-- The registration chain runs end-to-end against scripted Apple responses.
-- The protocol is proven live by a private sibling implementation: a working device-identity chain and, as of 2026-09-29, a full GSA login against Apple's live endpoints (SRP, trusted-device 2FA, PET delivery, delegate sign-in). Those findings are in the spec (rev 25). Apple currently refuses the sign-in with `ICLOUD_UNSUPPORTED_DEVICE` — a device-identity-bound activation limit, not a protocol gap.
+- The courier's auth model is settled: the packed path needs no client certificate; the legacy path answers the handshake with a TLS 1.3 post-handshake `certificate_required` alert.
 
 Not validated yet:
 
-- No real device registration or message send. First live activation is the next milestone.
+- No real message send or receive over the courier; renewal across sessions is untested.
 - The crypto envelopes have round-trip tests but no known-answer vectors from a live device.
 - A few wire details are capture-bound guesses, tracked in the spec's open-questions checklist.
 - PQ3 is unsupported.
