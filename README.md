@@ -105,3 +105,5 @@ Standalone — no sibling checkouts required:
 ## License
 
 [Apache-2.0](LICENSE).
+
+<p align="center">Support my work by leaving me a <a href="https://ko-fi.com/fenleon">tip</a> or <a href="https://github.com/sponsors/fenleon">sponsoring me</a>. A little goes a long way.</p>
