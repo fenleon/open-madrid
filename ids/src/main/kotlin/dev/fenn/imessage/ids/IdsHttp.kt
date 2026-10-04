@@ -58,11 +58,26 @@ object AppleTrust {
      */
     const val COURIER_ROOT_RESOURCE = "/imessage/AAACertificateServices.cer"
 
+    /**
+     * The packed-format courier chain's intermediate anchor (spec §3.2, C19 closed in rev 26):
+     * with the `apns-pack-v1` ALPN the server serves leaf ← `Apple Server Authentication CA`
+     * ← Apple Root CA, and the working client pins the INTERMEDIATE itself (observed on the
+     * wire 2026-10-03; the same CA the albert activation pool's chain passes through).
+     */
+    const val COURIER_PACKED_ANCHOR_RESOURCE = "/imessage/AppleServerAuthenticationCA.cer"
+
     /** The default pool: the two embedded Apple roots (spec §1.2 [CAP-IDSTLS]). */
     fun defaultTrustManager(): X509TrustManager = trustManager(*embeddedRootDers())
 
-    /** The courier pool: the single embedded `AAA Certificate Services` root (§3.1 [CAP-COURIERTLS]). */
-    fun courierTrustManager(): X509TrustManager = trustManager(embeddedRoot(COURIER_ROOT_RESOURCE))
+    /**
+     * The courier pool: the `AAA Certificate Services` root (§3.1 [CAP-COURIERTLS] — the
+     * no-ALPN ECC chain) plus the `Apple Server Authentication CA` intermediate (the pack-v1
+     * RSA chain the ALPN selects; §3.2 C19, rev 26).
+     */
+    fun courierTrustManager(): X509TrustManager = trustManager(
+        embeddedRoot(COURIER_ROOT_RESOURCE),
+        embeddedRoot(COURIER_PACKED_ANCHOR_RESOURCE),
+    )
 
     /** A socket factory whose only trust anchor is [trustManager]. */
     fun sslSocketFactory(trustManager: X509TrustManager): SSLSocketFactory =

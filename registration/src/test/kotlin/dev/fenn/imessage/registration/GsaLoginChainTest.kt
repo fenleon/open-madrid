@@ -72,18 +72,20 @@ class GsaLoginChainTest {
         now: () -> Long = { 1_770_000_000_000L },
     ) = GsaLoginChain(
         http = http,
-        cpd = cpd,
+        cpd = { cpd },
         credentialStore = store,
-        twoFactorBrowserHeaders = GsaTwoFactorHeaders.of(
-            cpd,
-            device = GsaHeaderConfig(
-                hardwareModel = "iMac13,1",
-                osName = "macOS",
-                osVersion = "13.6.4",
-                osBuild = "22G513",
-            ),
-            userAgent = "ua",
-        ),
+        twoFactorHeaders = {
+            GsaTwoFactorHeaders.of(
+                cpd,
+                device = GsaHeaderConfig(
+                    hardwareModel = "iMac13,1",
+                    osName = "macOS",
+                    osVersion = "13.6.4",
+                    osBuild = "22G513",
+                ),
+                userAgent = "ua",
+            )
+        },
         clock = now,
     )
 

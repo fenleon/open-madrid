@@ -173,7 +173,13 @@ class GsaTwoFactorHeaders(
  */
 class GsaTwoFactorClient(
     private val http: IdsHttp,
-    private val browserHeaders: GsaTwoFactorHeaders? = null,
+    /**
+     * Fresh per phase (trigger, validate): GSA ties the validate to the anisette OTP's age —
+     * a frozen set from login time answers HTTP 434 (rev 26, live: the frozen-OTP wall;
+     * upstream re-fetches anisette before every 2FA call, 60 s provider cache). Null omits
+     * the browser-style set.
+     */
+    private val browserHeaders: suspend () -> GsaTwoFactorHeaders? = { null },
     private val authBase: String = "https://gsa.apple.com/auth",
     private val validateUrl: String = "https://gsa.apple.com/grandslam/GsService2/validate",
     private val trustedDeviceUrl: String = "https://gsa.apple.com/auth/verify/trusteddevice",
@@ -247,7 +253,13 @@ class GsaTwoFactorClient(
     /** `GET .../auth/verify/trusteddevice` — push the code to the trusted devices. */
     suspend fun triggerTrustedDevice(identityToken: String) {
         logEvent("gsa 2fa: trigger trusted device")
-        val response = http.get(trustedDeviceUrl, headers(identityToken))
+        val response = http.get(
+            trustedDeviceUrl,
+            headers(identityToken) + mapOf(
+                CONTENT_TYPE_HEADER to PLIST_CONTENT_TYPE,
+                "Accept" to PLIST_CONTENT_TYPE,
+            ),
+        )
         if (response.status != 200 && response.status != 201) {
             throw GsaLoginException(
                 "GSA trusted-device trigger GET $trustedDeviceUrl → HTTP ${response.status} (§1.5)",
@@ -262,13 +274,22 @@ class GsaTwoFactorClient(
         nowEpochMs: Long,
     ): GsaSecondaryAuthTokens {
         logEvent("gsa 2fa: submit trusted device code")
-        val response = http.get(validateUrl, headers(identityToken) + mapOf("security-code" to securityCode))
+        val response = http.get(
+            validateUrl,
+            headers(identityToken) + mapOf(
+                "security-code" to securityCode,
+                CONTENT_TYPE_HEADER to PLIST_CONTENT_TYPE,
+                "Accept" to PLIST_CONTENT_TYPE,
+            ),
+        )
         return tokensOf(response, nowEpochMs)
     }
 
     private suspend fun tokensOf(response: IdsHttpResponse, nowEpochMs: Long): GsaSecondaryAuthTokens {
         if (response.status != 200 && response.status != 201) {
-            throw GsaLoginException("GSA 2FA verification → HTTP ${response.status} (§1.5)")
+            // The HTTP status alone is opaque — the body's plist `Status.ec`/`em` names the
+            // real failure (rev 26, live: 434 with an empty-looking body). Surface it.
+            throw GsaLoginException("GSA 2FA verification → HTTP ${response.status} (§1.5)${statusDetail(response)}")
         }
         return GsaSecondaryAuthTokens(
             gsTokens = GsaTokenHeaders.gsTokens(response.headers.header(HEADER_GS), nowEpochMs),
@@ -276,6 +297,29 @@ class GsaTwoFactorClient(
                 ?.let { GsaTokenHeaders.parse(HEADER_HB, it, nowEpochMs) } ?: emptyList(),
             pet = GsaTokenHeaders.pet(response.headers.header(HEADER_PE), nowEpochMs),
         )
+    }
+
+    /**
+     * The 2FA error body is a plist whose `Status.ec`/`em` (or top-level `ec`/`em`) name the
+     * real failure; when nothing parses, a redacted preview (any long token-like run masked)
+     * so the failure is visible without exposing credential material.
+     */
+    private fun statusDetail(response: IdsHttpResponse): String {
+        val body = response.body
+        if (body.isEmpty()) return " — empty body"
+        val parsed = try {
+            val dict = XmlPlist.decode(body) as? Map<*, *>
+            val status = dict?.get("Status") as? Map<*, *> ?: dict
+            val ec = status?.get("ec")?.toString()
+            val em = status?.get("em")?.toString()
+            if (ec != null && ec != "0") " — ec=$ec em=$em" else null
+        } catch (e: Exception) {
+            null
+        }
+        val preview = String(body, Charsets.ISO_8859_1)
+            .replace(Regex("[A-Za-z0-9+/=]{40,}"), "<redacted>")
+            .take(400)
+        return (parsed ?: " — body(${body.size}B): $preview")
     }
 
     private fun phoneBody(phoneNumberId: String) = buildJsonObject {
@@ -287,8 +331,8 @@ class GsaTwoFactorClient(
         (this as? JsonPrimitive)?.takeIf { it !is JsonNull }?.content
 
     /** §1.5: every 2FA request carries the identity token plus the recorded header set. */
-    private fun headers(identityToken: String): Map<String, String> =
-        (browserHeaders?.toHeaders() ?: emptyMap()) + mapOf(IDENTITY_TOKEN_HEADER to identityToken)
+    private suspend fun headers(identityToken: String): Map<String, String> =
+        (browserHeaders()?.toHeaders() ?: emptyMap()) + mapOf(IDENTITY_TOKEN_HEADER to identityToken)
 
     private fun Map<String, String>.header(lowercasedName: String): String? =
         entries.firstOrNull { it.key.equals(lowercasedName, ignoreCase = true) }?.value
@@ -297,6 +341,8 @@ class GsaTwoFactorClient(
         const val IDENTITY_TOKEN_HEADER = "X-Apple-Identity-Token"
         const val CONTENT_TYPE_HEADER = "Content-Type"
         const val JSON_CONTENT_TYPE = "application/json"
+        /** The GSA plist POSTs' content type (§1.5) — the trigger/validate GETs carry it too (rev 26). */
+        const val PLIST_CONTENT_TYPE = "text/x-xml-plist"
         const val HEADER_GS = GsaTokenHeaders.HEADER_GS
         const val HEADER_HB = GsaTokenHeaders.HEADER_HB
         const val HEADER_PE = GsaTokenHeaders.HEADER_PE

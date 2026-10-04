@@ -176,6 +176,7 @@ internal class DryRunAppleEnvironment(
     var trustedDeviceTriggers = 0
     var validateCount = 0
     var signInCount = 0
+    var postdataCount = 0
     var authenticateCount = 0
     var registerCount = 0
 
@@ -231,6 +232,7 @@ internal class DryRunAppleEnvironment(
             AlbertActivator.DEFAULT_URL -> albert(headers, body, contentType)
             "https://gsa.apple.com/grandslam/GsService2" -> grandslam(body)
             GsaDelegateLoginClient.SIGNIN_ENDPOINT -> delegateSignIn(headers, body)
+            GsaPostdataClient.ENDPOINT -> postdata(headers, body, contentType)
             authenticateUrl -> authenticate(headers, body, contentType)
             registerUrl -> register(headers, body, contentType)
             else -> throw IllegalStateException("dry-run fake: unexpected POST $url")
@@ -326,7 +328,13 @@ internal class DryRunAppleEnvironment(
         )) { "ActivationInfoXML keys are ${nested.keys} (§1.2)" }
         require(nested["ActivationState"] == "Unactivated") { "ActivationState must be Unactivated (§1.2)" }
         require(nested["DeviceClass"] == "MacOS") { "DeviceClass must be MacOS (§1.2)" }
-        val csrPem = nested["DeviceCertRequest"] as String
+        // rev 26 (live 2026-10-03): DeviceCertRequest rides as plist `<data>` of the PEM text
+        // (base64(PEM)) — DER is rejected server-side.
+        val csrPem = when (val request = nested["DeviceCertRequest"]) {
+            is ByteArray -> request.decodeToString()
+            is String -> request
+            else -> throw IllegalStateException("DeviceCertRequest is neither data nor string (§1.2)")
+        }
         require(csrPem.contains(Pem.CSR_TYPE)) { "DeviceCertRequest is not a PEM CSR (§1.2)" }
         val csrValues = csrSubjectValues(Pem.decode(csrPem, Pem.CSR_TYPE))
         require(csrValues == listOf(AlbertCsr.COMMON_NAME, AlbertCsr.ORGANIZATIONAL_UNIT, AlbertCsr.ORGANIZATION)) {
@@ -432,7 +440,12 @@ $inner</Protocol>""".toByteArray()
                 "adsid" to adsid,
                 "DsPrsId" to 123456789L,
                 "GsIdmsToken" to "idms-token-1",
-                "t" to emptyMap<String, Any?>(),
+                "t" to linkedMapOf<String, Any?>(
+                    "com.apple.gs.idms.hb" to linkedMapOf<String, Any?>(
+                        "token" to "hb-token-1",
+                        "duration" to 3600L,
+                    ),
+                ),
             ),
         )
         val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
@@ -508,12 +521,16 @@ $inner</Protocol>""".toByteArray()
         require(delegates.containsKey("com.apple.mobileme")) { "sign-in delegates miss com.apple.mobileme (§1.5)" }
         require(request["protocolVersion"] == "1.0") { "sign-in protocolVersion must be 1.0 (§1.5)" }
         val userInfo = request["userInfo"] as? Map<*, *>
-        require(userInfo != null && userInfo.keys == setOf("clientId", "language", "timezone")) {
+        // rev 26 (live 2026-10-04): the client id rides the kebab-case wire key `client-id`.
+        require(userInfo != null && userInfo.keys == setOf("client-id", "language", "timezone")) {
             "sign-in userInfo shape wrong (§1.5)"
         }
         require((userInfo["language"] as String) == "en-US") { "sign-in userInfo.language must be en-US (§1.5)" }
 
         signInCount++
+        // rev 26 (live 2026-10-04): Apple's live sign-in response is kebab-case — the ids
+        // delegate answers `status-message`/`service-data` (the parser keeps a camelCase
+        // fallback for the §1.5 extraction recording).
         return plist(
             200,
             linkedMapOf(
@@ -521,8 +538,8 @@ $inner</Protocol>""".toByteArray()
                 "delegates" to linkedMapOf<String, Any?>(
                     "com.apple.private.ids" to linkedMapOf<String, Any?>(
                         "status" to 0L,
-                        "statusMessage" to "OK",
-                        "serviceData" to linkedMapOf<String, Any?>(
+                        "status-message" to "OK",
+                        "service-data" to linkedMapOf<String, Any?>(
                             "auth-token" to authToken,
                             "profile-id" to profileId,
                         ),
@@ -534,6 +551,37 @@ $inner</Protocol>""".toByteArray()
                 ),
             ),
         )
+    }
+
+    // ---- GSA postdata liveness (§1.5, rev 26) ----
+
+    private fun postdata(headers: Map<String, String>, body: ByteArray, contentType: String): IdsHttpResponse {
+        postdataCount++
+        require(contentType == GsaPostdataClient.CONTENT_TYPE) { "postdata is not text/x-xml-plist (§1.5)" }
+        require(headers["X-Apple-I-UrlSwitch-Info"] == base64("$adsid:postdata")) {
+            "postdata X-Apple-I-UrlSwitch-Info is not base64(<adsid>:postdata) (§1.5)"
+        }
+        require(headers["X-Apple-HB-Token"] == base64("$adsid:hb-token-1")) {
+            "postdata X-Apple-HB-Token is not base64(<adsid>:<com.apple.gs.idms.hb token>) (§1.5)"
+        }
+        require(headers["User-Agent"] == GsaHeaderConfig.AKD_USER_AGENT) { "postdata UA is not the akd literal (§1.5)" }
+        // The anisette filter: machine/device headers ride, serial-bearing and locale ones don't.
+        require(headers.containsKey("X-Apple-I-MD") && headers.containsKey("X-Apple-I-MD-M")) {
+            "postdata carries no machine anisette headers (§1.5)"
+        }
+        require(!headers.containsKey("X-Apple-I-SRL-NO") && !headers.containsKey("X-Apple-I-MLB")) {
+            "postdata must drop the serial-bearing anisette headers (§1.5)"
+        }
+        val dict = Plist.parse(body) as? Map<*, *> ?: throw IllegalStateException("postdata body is not a plist (§1.5)")
+        require(dict.keys == setOf("Header", "Request")) { "postdata body top-level keys are ${dict.keys} (§1.5)" }
+        require((dict["Header"] as? Map<*, *>)?.isEmpty() == true) { "postdata Header must be empty (§1.5)" }
+        val request = dict["Request"] as? Map<*, *> ?: throw IllegalStateException("postdata Request is not a dict (§1.5)")
+        require(request["event"] == GsaPostdataClient.EVENT_LIVENESS) { "postdata event is not liveness (§1.5)" }
+        require(request["services"] == GsaPostdataClient.SERVICES) {
+            "postdata services are ${request["services"]} (§1.5)"
+        }
+        require(request["prkgen"] == true) { "postdata prkgen is not true (§1.5)" }
+        return plist(200, linkedMapOf("Status" to linkedMapOf<String, Any?>("ec" to 0L, "em" to "")))
     }
 
     // ---- authenticate (§1.2) ----

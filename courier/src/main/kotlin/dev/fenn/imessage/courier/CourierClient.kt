@@ -17,7 +17,9 @@ import kotlinx.coroutines.withContext
 
 /**
  * APNs courier transport per spec §3: TLS to "<random 1..count>-<hostname>" with SNI set
- * to the bare hostname, legacy frame format, keepalive pacing, reconnect with backoff.
+ * to the bare hostname, legacy or packed frame format by the negotiated ALPN (§3.2, C19 —
+ * `apns-pack-v1` selects the packed codec; legacy stays the default path), keepalive pacing,
+ * reconnect with backoff.
  *
  * Command construction lives in [CourierCommands] / [CourierConnect] (spec §3.3, C45 closed
  * in rev 12). Keepalive/reconnect pacing are our client-policy constants (both source
@@ -28,8 +30,10 @@ import kotlinx.coroutines.withContext
  * so [tlsFactory] must pin that root (root only; the leaf rotates every ~90 days). Port
  * note: the originating repo's embedded-root trust component was not ported into this
  * module, so no default factory is provided — the caller supplies the pinned factory.
- * Whether the handshake presents the Albert client certificate is C18-open — no client
- * certificate is configured here.
+ * Client certificate: on the packed `apns-pack-v1` path no TLS client certificate is
+ * demanded (rev 26 — the push certificate rides only in the connect frame); the C18
+ * post-handshake client-cert alert belongs to the no-ALPN legacy path. No client
+ * certificate is configured here either way.
  */
 class CourierClient(
     private val config: Config,
@@ -48,8 +52,72 @@ class CourierClient(
     )
 
     interface Handler {
+        /** The negotiated codec; build and send the connect through it (§3.2, C19). */
+        fun onConnected(codec: Codec) {}
+
         fun onFrame(frame: CourierFrame.Frame) {}
-        fun onConnected() {}
+
+        /** Packed-format frame (§3.2, C19) — delivered instead of [onFrame] on a packed connection. */
+        fun onPackedFrame(frame: CourierPacked.Frame) {}
+    }
+
+    /** The wire codec chosen by the negotiated ALPN (spec §3.2, C19). */
+    interface Codec {
+        fun sendConnect(token: ByteArray?, certDer: ByteArray, nonce: ByteArray, signature: ByteArray)
+
+        fun sendSetState()
+
+        fun sendFilter(token: ByteArray, enabledTopics: List<String>)
+
+        fun sendPing()
+    }
+
+    private inner class PackedCodec : Codec {
+        override fun sendConnect(token: ByteArray?, certDer: ByteArray, nonce: ByteArray, signature: ByteArray) {
+            sendFrame(CourierPacked.connectFrame(token, certDer, nonce, signature))
+        }
+
+        override fun sendSetState() {
+            sendFrame(CourierPacked.setStateFrame())
+        }
+
+        override fun sendFilter(token: ByteArray, enabledTopics: List<String>) {
+            sendFrame(CourierPacked.filterFrame(token, enabledTopics))
+        }
+
+        override fun sendPing() {
+            sendFrame(CourierPacked.ping())
+        }
+    }
+
+    private inner class LegacyCodec : Codec {
+        override fun sendConnect(token: ByteArray?, certDer: ByteArray, nonce: ByteArray, signature: ByteArray) {
+            val frame = CourierConnect.connectFrame(
+                deviceToken = token ?: ByteArray(0),
+                pushCertificateDer = certDer,
+                nonce = nonce,
+                signature = signature,
+            )
+            sendFrame(CourierFrame.encode(frame.command, frame.fields.map { it.id to it.value }))
+        }
+
+        override fun sendSetState() {
+            val frame = CourierCommands.setStateFrame(CourierCommands.CONNECT_STATE)
+            sendFrame(CourierFrame.encode(frame.command, frame.fields.map { it.id to it.value }))
+        }
+
+        override fun sendFilter(token: ByteArray, enabledTopics: List<String>) {
+            val frame = CourierCommands.filterFrame(
+                token,
+                enabled = enabledTopics.map(CourierCommands::topicHash),
+                shape = CourierCommands.FilterShape.TOPIC_LIST,
+            )
+            sendFrame(CourierFrame.encode(frame.command, frame.fields.map { it.id to it.value }))
+        }
+
+        override fun sendPing() {
+            sendFrame(CourierFrame.encode(CourierFrame.KEEPALIVE))
+        }
     }
 
     private val random = SecureRandom()
@@ -70,8 +138,9 @@ class CourierClient(
     }
 
     /**
-     * Runs the connect/read/keepalive/reconnect loop until cancelled. Each connection
-     * calls [handler.onConnected], then every inbound frame goes to [handler.onFrame].
+     * Runs the connect/read/keepalive/reconnect loop until cancelled. Each connection calls
+     * [handler.onConnected] with the ALPN-negotiated codec, then every inbound frame goes to
+     * [handler.onFrame] (legacy framing) or [handler.onPackedFrame] (packed framing, C19).
      */
     suspend fun run(handler: Handler) {
         while (coroutineContext.isActive) {
@@ -82,6 +151,14 @@ class CourierClient(
                     tcp.connect(java.net.InetSocketAddress(tcpHost, config.port), CONNECT_TIMEOUT_MS)
                     val ssl = tlsFactory(tcp, config.hostname)
                     tcp.soTimeout = CONNECT_TIMEOUT_MS
+                    // Offer the packed-format ALPN the courier speaks (spec §3.2, C19, rev 26):
+                    // the live server ignores the offer and answers `apns-pack-v1:<enc>:<dec>`
+                    // (observed 4096:4096 on every host) — OpenJDK rejects a selection outside
+                    // the offer, so the exact suffixed form must be offered alongside the bare
+                    // names; the legacy path stays the default when no pack protocol is selected.
+                    ssl.sslParameters = (ssl.sslParameters ?: javax.net.ssl.SSLParameters()).apply {
+                        applicationProtocols = arrayOf("apns-pack-v1:4096:4096", "apns-pack-v1", "apns-security-v3")
+                    }
                     try {
                         ssl.startHandshake()
                     } finally {
@@ -90,11 +167,12 @@ class CourierClient(
                     ssl
                 }
                 backoffAttempt.set(0)
-                handler.onConnected()
+                val codec = codecFor(socket!!)
+                handler.onConnected(codec)
                 val connection = socket!!
                 coroutineScope {
-                    val reader = launch(Dispatchers.IO) { readLoop(connection, handler) }
-                    launch(Dispatchers.IO) { keepaliveLoop(connection) }
+                    val reader = launch(Dispatchers.IO) { readLoop(codec, connection, handler) }
+                    launch(Dispatchers.IO) { keepaliveLoop(codec, connection) }
                     reader.join()
                     closeSocket() // ends the keepalive ticker with the reader
                 }
@@ -111,8 +189,20 @@ class CourierClient(
         }
     }
 
-    private fun readLoop(connection: SSLSocket, handler: Handler) {
+    /** The ALPN-negotiated codec: `apns-pack-v1*` speaks the packed format (§3.2, C19), else legacy. */
+    private fun codecFor(ssl: SSLSocket): Codec =
+        if (ssl.applicationProtocol?.startsWith("apns-pack-v1") == true) PackedCodec() else LegacyCodec()
+
+    private fun readLoop(codec: Codec, connection: SSLSocket, handler: Handler) {
         val input = connection.getInputStream()
+        if (codec is PackedCodec) {
+            val packed = CourierPacked()
+            while (true) {
+                val frame = packed.decode(input) ?: return // clean EOF
+                if (frame.command == CourierFrame.KEEPALIVE_ACK) lastPongMillis = System.currentTimeMillis()
+                handler.onPackedFrame(frame)
+            }
+        }
         while (true) {
             val frame = CourierFrame.decode(input) ?: return // clean EOF
             if (frame.command == CourierFrame.KEEPALIVE_ACK) lastPongMillis = System.currentTimeMillis()
@@ -123,13 +213,13 @@ class CourierClient(
     @Volatile
     private var lastPongMillis: Long = 0
 
-    private fun keepaliveLoop(connection: SSLSocket) {
+    private fun keepaliveLoop(codec: Codec, connection: SSLSocket) {
         val intervalMs = config.keepaliveSecs * 1000
         val timeoutMs = config.pongTimeoutSecs * 1000
         lastPongMillis = System.currentTimeMillis()
         while (!connection.isClosed) {
             try {
-                sendFrame(CourierFrame.encode(CourierFrame.KEEPALIVE))
+                codec.sendPing()
             } catch (e: IOException) {
                 return // reader will notice too; reconnect loop takes over
             }

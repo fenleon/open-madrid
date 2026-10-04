@@ -53,13 +53,14 @@ fun interface FairPlaySigner {
 
 /**
  * The nested ActivationInfoXML plist of spec §1.2 — keys `ActivationRandomness` (uppercase
- * UUIDv4), `ActivationState` ("Unactivated"), `BuildVersion`, `DeviceCertRequest` (PEM CSR),
- * `DeviceClass`, `ProductType`, `ProductVersion`, `SerialNumber`, `UniqueDeviceID`.
+ * UUIDv4), `ActivationState` ("Unactivated"), `BuildVersion`, `DeviceCertRequest` (the PEM
+ * CSR as plist `<data>`), `DeviceClass`, `ProductType`, `ProductVersion`, `SerialNumber`,
+ * `UniqueDeviceID`.
  */
 data class AlbertActivationInfo(
     val activationRandomness: String,
     val buildVersion: String,
-    /** `DeviceCertRequest` — the PEM CSR of §1.2 ([AlbertCsr.create]). */
+    /** `DeviceCertRequest` — the PEM CSR of §1.2 ([AlbertCsr.create]), sent as `<data>`(PEM). */
     val deviceCertRequestPem: String,
     val deviceClass: String = DEVICE_CLASS_MACOS,
     val productType: String,
@@ -71,7 +72,10 @@ data class AlbertActivationInfo(
         "ActivationRandomness" to activationRandomness,
         "ActivationState" to ACTIVATION_STATE,
         "BuildVersion" to buildVersion,
-        "DeviceCertRequest" to deviceCertRequestPem,
+        // rev 26 (live 2026-10-03): the accepted request carries base64(PEM) — the PEM CSR TEXT
+        // bytes in the `<data>`; a DER-encoded CSR is rejected server-side (the
+        // SIGNATURE_VERIFICATION_FAILED page).
+        "DeviceCertRequest" to deviceCertRequestPem.toByteArray(),
         "DeviceClass" to deviceClass,
         "ProductType" to productType,
         "ProductVersion" to productVersion,
@@ -136,6 +140,11 @@ data class AlbertActivationResponse(
     val ackReceived: Any?,
     val showSettings: Any?,
     val raw: Map<String, Any?>,
+    /**
+     * Redacted body excerpt carried when Apple refused (no DeviceCertificate) — the wrapped-UI
+     * refusal states its reason in page text (rev 26, live 2026-10-02). Diagnostic only.
+     */
+    val refusalBody: String? = null,
 )
 
 /**
@@ -193,12 +202,29 @@ class AlbertActivator(
                 "activation 'device-activation' is ${typeName(deviceActivation)}, expected a dict",
             )
         }
-        val certificate = activationRecord?.get("DeviceCertificate") as? String
+        // Apple wraps the PEM text in plist `<data>` (rev 26, live 2026-10-03: base64(PEM)
+        // inside the activation record) — the XML decode yields bytes; the plain-string form
+        // (§1.2's original recording) is accepted too.
+        val certificate = when (val v = activationRecord?.get("DeviceCertificate")) {
+            is String -> v
+            is ByteArray -> String(v, Charsets.UTF_8)
+            else -> null
+        }
+        val refusalBody = if (certificate == null) {
+            // Apple's refusal answers carry no certificate; a wrapped-UI one (rev 26, live
+            // 2026-10-02: empty record + a `<Document>` page) states the reason in its text.
+            // Carry a redacted excerpt — data blobs stripped, whitespace collapsed.
+            String(bytes, Charsets.UTF_8)
+                .replace(Regex("<[a-zA-Z0-9]*Data>[^<]*</[a-zA-Z0-9]*Data>"), "<data>")
+                .replace(Regex("\\s+"), " ")
+                .take(4000)
+        } else null
         return AlbertActivationResponse(
             deviceCertificatePem = certificate,
             ackReceived = root["ack-received"],
             showSettings = root["show-settings"],
             raw = root,
+            refusalBody = refusalBody,
         )
     }
 

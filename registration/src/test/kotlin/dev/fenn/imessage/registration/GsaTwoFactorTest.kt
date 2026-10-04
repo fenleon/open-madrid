@@ -52,7 +52,7 @@ class GsaTwoFactorTest {
 
     private fun client(http: IdsHttp) = GsaTwoFactorClient(
         http = http,
-        browserHeaders = browserHeaders(),
+        browserHeaders = { browserHeaders() },
         authBase = "https://gsa.example/auth",
         validateUrl = "https://gsa.example/GsService2/validate",
         trustedDeviceUrl = "https://gsa.example/auth/verify/trusteddevice",

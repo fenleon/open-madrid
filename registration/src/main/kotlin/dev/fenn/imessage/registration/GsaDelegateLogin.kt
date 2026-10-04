@@ -54,7 +54,7 @@ data class IcloudSignInRequest(
     val adsid: String,
     /** The §1.1 validation blob, base64'd into `X-Mme-Nas-Qualify`. */
     val validationData: ByteArray,
-    /** `userInfo.clientId` — uppercase UUIDv4 (§1.5). */
+    /** `userInfo`'s client id — sent as the kebab-case wire key `client-id`, uppercase UUIDv4 (§1.5, rev 26). */
     val clientId: String,
     /** `userInfo.timezone` — the recorded hardcoded-IANA-name default (§1.5 C59). */
     val timezone: String = GsaDelegateLoginClient.SIGNIN_TIMEZONE,
@@ -104,7 +104,10 @@ data class IcloudSignInResponse(
         }
         val serviceData = delegate.serviceData
             ?: throw GsaLoginException(
-                "${GsaDelegateLoginClient.IDS_DELEGATE_BUNDLE_ID} delegate carries no serviceData (§1.5)",
+                "${GsaDelegateLoginClient.IDS_DELEGATE_BUNDLE_ID} delegate carries no serviceData (§1.5) — " +
+                    "delegate keys=${delegate.raw.keys}, top-level keys=${raw.keys}, delegate scalars=" +
+                    delegate.raw.entries.filter { it.value !is Map<*, *> }
+                        .joinToString { "${it.key}=${it.value}" },
             )
         val authToken = serviceData["auth-token"] as? String
             ?: throw GsaLoginException(
@@ -156,7 +159,10 @@ class GsaDelegateLoginClient(
             ),
             "protocolVersion" to PROTOCOL_VERSION,
             "userInfo" to linkedMapOf<String, Any?>(
-                "clientId" to request.clientId,
+                // rev 26 (live 2026-10-04): the sign-in body's client id rides kebab-case
+                // (`client-id` — the recorded upstream identity struct is kebab-case on the
+                // wire); "clientId" was the one body delta vs the live request capture.
+                "client-id" to request.clientId,
                 "language" to "en-US",
                 "timezone" to request.timezone,
             ),
@@ -219,12 +225,15 @@ class GsaDelegateLoginClient(
         )
     }
 
+    // Apple's live sign-in response is kebab-case (rev 26, live 2026-10-04: delegate keys =
+    // [status, service-data, account-exists]); the camelCase fallback keeps the §1.5
+    // extraction recording parseable.
     private fun parseDelegate(dict: Map<String, Any?>) = IcloudDelegateResult(
         status = integerOrNull(dict["status"]),
-        statusMessage = dict["statusMessage"] as? String,
-        serviceData = dict["serviceData"]?.let {
+        statusMessage = (dict["status-message"] ?: dict["statusMessage"]) as? String,
+        serviceData = (dict["service-data"] ?: dict["serviceData"])?.let {
             stringKeyedDictOrNull(it)
-                ?: throw GsaLoginException("delegate serviceData is ${typeName(it)}, expected a dict (§1.5)")
+                ?: throw GsaLoginException("delegate service-data is ${typeName(it)}, expected a dict (§1.5)")
         },
         raw = dict,
     )

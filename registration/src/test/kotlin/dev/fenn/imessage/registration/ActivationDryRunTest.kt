@@ -225,9 +225,9 @@ class ActivationDryRunTest {
         val cpd = GsaCpd(anisette = anisette, keychainIdentifier = ByteArray(16) { (it + 1).toByte() })
         val chain = GsaLoginChain(
             http = env,
-            cpd = cpd,
+            cpd = { cpd },
             credentialStore = IdsStoreGsaCredentials(store),
-            twoFactorBrowserHeaders = GsaTwoFactorHeaders.of(cpd, device = deviceConfig),
+            twoFactorHeaders = { GsaTwoFactorHeaders.of(cpd, device = deviceConfig) },
             headerConfig = deviceConfig,
             clock = { now },
             logEvent = {},
@@ -284,6 +284,22 @@ class ActivationDryRunTest {
         assertEquals("pet-3", env.delegatePet) // Basic username:PET (§1.5)
         assertEquals(env.authToken, credentials.authToken)
         assertEquals(env.profileId, credentials.profileId)
+
+        // The GSA postdata liveness event fires AFTER the delegate sign-in (rev 26 order —
+        // sign-in first, postdata after; the sign-in mints its own Nas-Qualify blob), with a
+        // FRESH anisette set and the spd's com.apple.gs.idms.hb token.
+        GsaPostdataClient(env).post(
+            GsaPostdataRequest(
+                adsid = env.adsid,
+                hbToken = authenticated.spd!!.tokens[GsaSpd.SERVICE_IDMS_HB]!!.token,
+                anisette = anisette,
+                clientInfo = deviceConfig.clientInfo,
+            ),
+        )
+        assertEquals(1, env.postdataCount)
+        val signInIndex = env.callUrls().indexOfFirst { it == GsaDelegateLoginClient.SIGNIN_ENDPOINT }
+        val postdataIndex = env.callUrls().indexOfFirst { it == GsaPostdataClient.ENDPOINT }
+        assertTrue(signInIndex in 0 until postdataIndex, "postdata must come after the delegate sign-in (rev 26)")
 
         store.updateAccount { account ->
             account.copy(
@@ -445,11 +461,13 @@ class ActivationDryRunTest {
         )
         val chain = GsaLoginChain(
             http = env,
-            cpd = GsaCpd(anisette = anisetteHeaders(), keychainIdentifier = ByteArray(16)),
-            twoFactorBrowserHeaders = GsaTwoFactorHeaders.of(
-                GsaCpd(anisette = anisetteHeaders(), keychainIdentifier = ByteArray(16)),
-                device = deviceConfig,
-            ),
+            cpd = { GsaCpd(anisette = anisetteHeaders(), keychainIdentifier = ByteArray(16)) },
+            twoFactorHeaders = {
+                GsaTwoFactorHeaders.of(
+                    GsaCpd(anisette = anisetteHeaders(), keychainIdentifier = ByteArray(16)),
+                    device = deviceConfig,
+                )
+            },
             headerConfig = deviceConfig,
             clock = { 1_770_000_000_000L },
         )

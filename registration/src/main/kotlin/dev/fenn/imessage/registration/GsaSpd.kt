@@ -124,6 +124,12 @@ data class GsaSpd(
         /** The recorded TOP-LEVEL spd key whose value pairs with `adsid` in the identity token (§1.5). */
         const val SERVICE_IDMS_TOKEN = "GsIdmsToken"
 
+        /**
+         * The spd token-map service id whose token pairs with `adsid` in the §1.5 postdata
+         * liveness event's `X-Apple-HB-Token` header (rev 26; observed in the live 21-service map).
+         */
+        const val SERVICE_IDMS_HB = "com.apple.gs.idms.hb"
+
         fun parse(raw: Map<String, Any?>): GsaSpd {
             val tokensRaw = raw["t"]
                 ?: throw GsaLoginException("spd has no 't' token-map dict (§1.5, got null)")

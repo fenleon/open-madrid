@@ -122,9 +122,10 @@ class GsaDelegateLoginTest {
         assertEquals(mapOf("protocol-version" to "4"), delegates["com.apple.private.ids"])
         assertEquals(emptyMap<String, String>(), delegates["com.apple.mobileme"])
         val userInfo = body["userInfo"] as Map<*, *>
+        // rev 26 (live 2026-10-04): the client id rides the kebab-case wire key `client-id`.
         assertEquals(
             mapOf(
-                "clientId" to "A1B2C3D4-E5F6-4789-ABCD-0123456789AB",
+                "client-id" to "A1B2C3D4-E5F6-4789-ABCD-0123456789AB",
                 "language" to "en-US",
                 "timezone" to "Europe/Berlin",
             ),
@@ -139,6 +140,33 @@ class GsaDelegateLoginTest {
         assertEquals(0, response.status)
         assertNull(response.localizedError)
         assertEquals(2, response.delegates.size)
+        val credentials = response.idsDelegateCredentials()
+        assertEquals("ids-auth-token", credentials.authToken)
+        assertEquals("profile-1", credentials.profileId)
+    }
+
+    @Test
+    fun `parses Apple's live kebab-case delegate shape with the camelCase fallback`() = runBlocking {
+        // rev 26 (live 2026-10-04): the ids delegate answers `status-message`/`service-data`
+        // (kebab-case); the MobileMe delegate keeps the extraction's camelCase recording.
+        val kebab = XmlPlist.encode(
+            mapOf(
+                "status" to 0L,
+                "delegates" to linkedMapOf(
+                    "com.apple.private.ids" to linkedMapOf<String, Any?>(
+                        "status" to 0L,
+                        "status-message" to "OK",
+                        "service-data" to linkedMapOf<String, Any?>(
+                            "auth-token" to "ids-auth-token",
+                            "profile-id" to "profile-1",
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val response = client(ScriptedIdsHttp(listOf(IdsHttpResponse(200, emptyMap(), kebab))))
+            .signIn(request())
+        assertEquals("OK", response.delegates["com.apple.private.ids"]!!.statusMessage)
         val credentials = response.idsDelegateCredentials()
         assertEquals("ids-auth-token", credentials.authToken)
         assertEquals("profile-1", credentials.profileId)

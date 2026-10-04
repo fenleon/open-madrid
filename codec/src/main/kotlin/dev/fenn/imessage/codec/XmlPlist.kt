@@ -149,10 +149,17 @@ object XmlPlist {
     /**
      * The Albert activation response (§1.2): an XML document whose outer `<Protocol>` block
      * wraps a plist document. Parses the plist inside the Protocol element.
+     *
+     * Apple sometimes wraps the `<Protocol>` inside a larger response document (rev 26,
+     * live 2026-10-02: the activation answered `<Document><Protocol>…</Protocol><ScrollView>…`,
+     * whose surrounding UI XML is not well-formed enough for the parser) — the Protocol block
+     * is extracted by span first and parsed alone; a bare `<Protocol>` document parses as before.
      */
     fun decodeProtocol(bytes: ByteArray): Any? {
+        val text = PROTOCOL_SPAN.find(String(bytes, Charsets.UTF_8))?.value
+            ?: String(bytes, Charsets.UTF_8)
         val document = try {
-            builder().parse(ByteArrayInputStream(bytes))
+            builder().parse(ByteArrayInputStream(text.toByteArray(Charsets.UTF_8)))
         } catch (e: SAXParseException) {
             throw PlistFormatException("malformed XML at line ${e.lineNumber}: ${e.message}")
         } catch (e: Exception) {
@@ -241,4 +248,7 @@ object XmlPlist {
         }
         return out
     }
+
+    /** The §1.2 activation response's `<Protocol>` span, extracted from larger documents (rev 26). */
+    private val PROTOCOL_SPAN = Regex("<Protocol>.*</Protocol>", RegexOption.DOT_MATCHES_ALL)
 }

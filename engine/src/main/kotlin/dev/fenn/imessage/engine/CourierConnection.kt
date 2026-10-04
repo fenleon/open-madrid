@@ -2,6 +2,7 @@ package dev.fenn.imessage.engine
 
 import dev.fenn.imessage.courier.CourierClient
 import dev.fenn.imessage.courier.CourierFrame
+import dev.fenn.imessage.courier.CourierPacked
 import java.io.Closeable
 import java.io.IOException
 import javax.net.ssl.KeyManager
@@ -77,11 +78,13 @@ class CourierConnection(
     private inner class ForwardingHandler(
         private val delegate: CourierClient.Handler,
     ) : CourierClient.Handler {
-        override fun onConnected() {
+        override fun onConnected(codec: CourierClient.Codec) {
             _state.value = State.CONNECTED
-            delegate.onConnected()
+            delegate.onConnected(codec)
         }
 
         override fun onFrame(frame: CourierFrame.Frame) = delegate.onFrame(frame)
+
+        override fun onPackedFrame(frame: CourierPacked.Frame) = delegate.onPackedFrame(frame)
     }
 }

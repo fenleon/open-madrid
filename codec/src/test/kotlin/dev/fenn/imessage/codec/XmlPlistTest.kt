@@ -205,4 +205,28 @@ class XmlPlistTest {
         assertFailsWith<PlistFormatException> { XmlPlist.encode(mapOf("a" to BpUid(1uL))) }
         assertFailsWith<PlistFormatException> { XmlPlist.encode(mapOf<String, Any?>("a" to null)) }
     }
+
+    @Test
+    fun decodeProtocolParsesTheBareProtocolDocument() {
+        val document = "<Protocol><plist version=\"1.0\"><dict><key>a</key><integer>1</integer></dict></plist></Protocol>"
+        assertEquals(mapOf("a" to 1L), XmlPlist.decodeProtocol(document.toByteArray()))
+    }
+
+    @Test
+    fun decodeProtocolExtractsTheSpanFromALargerResponseDocument() {
+        // rev 26 (live 2026-10-02): the activation answered <Document><Protocol>…</Protocol>
+        // <ScrollView>… — the surrounding UI XML is not well-formed enough for the parser, so
+        // the Protocol span is extracted and parsed alone.
+        val wrapped = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <Document>
+                <Protocol><plist version="1.0"><dict><key>device-activation</key><dict/></dict></plist></Protocol>
+                <ScrollView xmlns="http://www.apple.com/ui" broken="&amp; &lt;unclosed>
+            </Document>
+        """.trimIndent()
+        assertEquals(
+            mapOf("device-activation" to emptyMap<String, Any?>()),
+            XmlPlist.decodeProtocol(wrapped.toByteArray()),
+        )
+    }
 }

@@ -99,7 +99,8 @@ class AlbertActivationTest {
         assertEquals("Unactivated", nested["ActivationState"])
         assertEquals("MacOS", nested["DeviceClass"])
         assertEquals("A1B2C3D4-E5F6-4A1B-8C2D-9E0F1A2B3C4D", nested["ActivationRandomness"])
-        assertEquals(PUSH_CSR.pem, nested["DeviceCertRequest"])
+        // rev 26 (live 2026-10-03): DeviceCertRequest rides `<data>`(base64 of the PEM text).
+        assertEquals(PUSH_CSR.pem, (nested["DeviceCertRequest"] as ByteArray).decodeToString())
     }
 
     @Test

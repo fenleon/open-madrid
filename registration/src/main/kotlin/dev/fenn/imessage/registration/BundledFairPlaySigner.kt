@@ -40,11 +40,14 @@ import java.security.interfaces.RSAPublicKey
 import java.security.spec.PKCS8EncodedKeySpec
 
 /**
- * The bundled FairPlay identity of spec §1.2 (rev 17; §7 item 21 user decision): the staged
- * classpath resources `imessage/fairplay/leaf.crt` (DER leaf certificate) and
- * `imessage/fairplay/identity.key` (PEM PKCS#1 `RSA PRIVATE KEY`). `FairPlaySignature` is
- * SHA-1 RSA PKCS#1v15 over the exact serialized ActivationInfoXML bytes; `FairPlayCertChain`
- * is the DER leaf alone, passed through verbatim (§1.2 — Apple's server fills in the rest).
+ * The bundled FairPlay identity of spec §1.2: the staged classpath resources
+ * `imessage/fairplay/leaf.crt` (DER leaf), `imessage/fairplay/fairplay-ca.crt` +
+ * `imessage/fairplay/apple-root-ca.crt` (the FairPlay CA and Apple Root CA links of the
+ * accepted activation request, rev 26), and `imessage/fairplay/identity.key` (PEM PKCS#1
+ * `RSA PRIVATE KEY`). `FairPlaySignature` is SHA-1 RSA PKCS#1v15 over the exact serialized
+ * ActivationInfoXML bytes; `FairPlayCertChain` is the three DER certificates concatenated —
+ * leaf + FairPlay CA + root (rev 26, live 2026-10-03: the accepted form; leaf-only and
+ * leaf+CA were refused). Apple accepts this expired-leaf identity as-is (§1.2 rev-17 fact).
  *
  * The default [FairPlaySigner] of [AlbertActivator]; tests inject a scripted signer instead.
  * Only status text reaches [logEvent] — no key or certificate material ever does.
@@ -53,7 +56,9 @@ class BundledFairPlaySigner(
     private val logEvent: (String) -> Unit = {},
 ) : FairPlaySigner {
 
-    private val leafChain: ByteArray by lazy { resource(LEAF_CERT_RESOURCE) }
+    private val leafChain: ByteArray by lazy {
+        resource(LEAF_CERT_RESOURCE) + resource(FAIRPLAY_CA_RESOURCE) + resource(ROOT_CA_RESOURCE)
+    }
 
     private val identityKey: RSAPrivateKey by lazy { loadPrivateKey() }
 
@@ -97,6 +102,8 @@ class BundledFairPlaySigner(
 
     companion object {
         const val LEAF_CERT_RESOURCE = "/imessage/fairplay/leaf.crt"
+        const val FAIRPLAY_CA_RESOURCE = "/imessage/fairplay/fairplay-ca.crt"
+        const val ROOT_CA_RESOURCE = "/imessage/fairplay/apple-root-ca.crt"
         const val IDENTITY_KEY_RESOURCE = "/imessage/fairplay/identity.key"
 
         /** §1.2: the FairPlay signature is SHA-1 RSA PKCS#1v15. */

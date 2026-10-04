@@ -119,10 +119,19 @@ class IdsStoreGsaCredentials(private val store: IdsStore) : GsaCredentialStore {
  */
 class GsaLoginChain(
     private val http: IdsHttp,
-    private val cpd: GsaCpd,
+    /**
+     * Fresh per login run: GSA rejects an SRP init whose `X-Apple-I-MD` was minted minutes
+     * earlier (rev 26, live: the one-time anisette OTP is spent per request, §1.5 rev-25 fact)
+     * — upstream mints a new set for every login attempt, including the post-2FA re-run.
+     */
+    private val cpd: suspend () -> GsaCpd,
     private val credentialStore: GsaCredentialStore? = null,
-    /** The recorded §1.5 browser-style 2FA header set (C59); null omits it. */
-    private val twoFactorBrowserHeaders: GsaTwoFactorHeaders? = null,
+    /**
+     * Fresh per 2FA call (trigger, validate): GSA ties the validate to the anisette OTP's age
+     * — a frozen set from login time answers HTTP 434 (rev 26, live: the frozen-OTP wall).
+     * Null-returning provider omits the browser-style set.
+     */
+    private val twoFactorHeaders: suspend () -> GsaTwoFactorHeaders? = { null },
     /** The §1.5 akd-variant headers of the GSA POSTs (C59 values) — null omits them. */
     private val headerConfig: GsaHeaderConfig? = null,
     private val random: SecureRandom = SecureRandom(),
@@ -134,8 +143,8 @@ class GsaLoginChain(
     private val delegateClient = GsaDelegateLoginClient(http, logEvent = logEvent)
 
     /** §1.5: the filtered anisette header set + the akd-variant headers, one per login. */
-    private fun gsaHeaders(): Map<String, String> =
-        headerConfig?.let { cpd.headersFor() + it.toHeaders() } ?: cpd.headersFor()
+    private suspend fun gsaHeaders(): Map<String, String> =
+        headerConfig?.let { cpd().headersFor() + it.toHeaders() } ?: cpd().headersFor()
 
     /** Full login with the raw password; the hash is computed here and never logged. */
     suspend fun login(username: String, password: String): GsaLoginResult =
@@ -149,7 +158,7 @@ class GsaLoginChain(
      */
     suspend fun loginWithPasswordHash(username: String, passwordHash: ByteArray): GsaLoginResult {
         val requestUuid = newRequestUuid()
-        val cpdDict = cpd.dictFor(requestUuid)
+        val cpdDict = cpd().dictFor(requestUuid)
         val gsaHeaders = gsaHeaders()
         val srp = GsaSrpClient(random)
         val a2k = srp.begin()
@@ -293,7 +302,10 @@ class GsaLoginChain(
      * form when the device config is wired ([GsaHeaderConfig.signInClientInfo]), falling back to
      * the bare recorded AOSKit inner component. [anisette] must be FRESHLY minted for this
      * call — the one-time OTP headers spent on the GSA hops are refused here (observed live;
-     * the reference client mints per request).
+     * the reference client mints per request). [validationData] must be a FRESH mint per
+     * sign-in (minted at sign-in time, never a login-start blob carried across the 2FA wait) —
+     * a consumed blob answers HTTP 409, the stamp REPLAY refusal, not a blob rejection
+     * (rev 26, §1.4's replay guard).
      */
     suspend fun idsDelegateCredentials(
         username: String,
@@ -336,7 +348,7 @@ class GsaLoginChain(
 
     private fun twoFactorClient() = GsaTwoFactorClient(
         http = http,
-        browserHeaders = twoFactorBrowserHeaders,
+        browserHeaders = twoFactorHeaders,
         logEvent = logEvent,
     )
 

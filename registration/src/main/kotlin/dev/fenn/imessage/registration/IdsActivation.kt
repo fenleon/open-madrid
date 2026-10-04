@@ -185,7 +185,19 @@ data class RegisterBody(
     val softwareVersion: String,
     val privateDeviceData: PrivateDeviceData,
     val services: List<RegisterService>,
-    /** The `validation-data` blob (§1.1) — carried verbatim; minting it is C5/C56-blocked. */
+    /**
+     * The `validation-data` blob (§1.1) — carried verbatim; minting it is C5/C56-blocked, so
+     * the caller injects it here (the caller-injectable validation stamp: a blob minted by
+     * this library, fetched from a relay Mac, or a captured stamp — the source is the
+     * caller's, the injection point is this field).
+     *
+     * REPLAY GUARD (rev 26, live): one mint = one device record. Apple keys the blob's
+     * consumption server-side — re-submitting an already-consumed blob at the delegate
+     * sign-in/§1.4 register pair answers HTTP 409, which is the REPLAY refusal, not a blob
+     * rejection (a fresh blob under the same device identity succeeds). Mint or fetch a
+     * fresh blob per registration attempt (the §1.1 15-minute validity window makes stale
+     * reuse doubly fatal), and never reuse a login-time blob across the 2FA wait.
+     */
     val validationData: ByteArray,
 ) {
     fun toDict(): Map<String, Any?> = linkedMapOf(
