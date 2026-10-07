@@ -71,6 +71,24 @@ class ClearAnisetteProviderTest {
     }
 
     @Test
+    fun cpimShaTailSealMatchesPinnedFormula() {
+        // session-19f continuation: X = SHA-256(encout ‖ spimMapSignature(trailing[0:16]) ‖ CONST24),
+        // tail = X ‖ trailing[16:76] — verified byte-exact against two live runs (cap8/cap9).
+        val trailing = ByteArray(99) { ((it * 7 + 3) and 0xff).toByte() }
+        val encout = ByteArray(32) { ((it * 11 + 5) and 0xff).toByte() }
+        val tail = CpimShaTailSeal.seal(trailing, encout, ByteArray(16))
+        assertEquals(92, tail.size)
+        assertContentEquals(
+            hex(
+                "342f120b8ed971980b7a4641822e648a4da000004a7e3116ee65a33a8999c2ab" +
+                    "737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b222930373e454c535a61686f767d" +
+                    "848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb020910",
+            ),
+            tail,
+        )
+    }
+
+    @Test
     fun cpimBuildMatchesLiveWireLayout() {
         val extra = ByteArray(10) { 0xAB.toByte() }
         val trailing = ByteArray(99) { (it + 1).toByte() }

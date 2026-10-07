@@ -171,7 +171,7 @@ class ClearAnisetteProvider(
     private val stateStore: ClearAdiStateStore,
     private val loginInfo: ClearAdiLoginInfo,
     private val rng: ClearAdiRng,
-    private val cpimTailSeal: CpimTailSeal,
+    private val cpimTailSeal: CpimTailSeal = CpimShaTailSeal,
     /** 16 random bytes identifying this client (reference `keychain_identifier`). */
     private val keychainIdentifier: ByteArray = rng.draw(16),
     private val clock: () -> Long = { System.currentTimeMillis() },

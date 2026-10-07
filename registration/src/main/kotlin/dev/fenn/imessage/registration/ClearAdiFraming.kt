@@ -1,5 +1,7 @@
 package dev.fenn.imessage.registration
 
+import java.security.MessageDigest
+
 /**
  * Wire framing of the ClearADI provisioning exchange — the deku reads/writes around the
  * already-ported ciphers ([ClearAdiProvision]). Ground truth: `ProvisioningSession::new`
@@ -26,7 +28,8 @@ class SpimFormatException(message: String) : Exception(message)
  * (session 19f) shows a real Spim carrying **99 trailing bytes** that parses fine — the
  * earlier "≤ 23 leftover" pin (error 0x41) was an artifact of the probe harness, not the
  * reader. The trailing bytes are server material the client relays verbatim into the Cpim
- * wire tail (see [Cpim]) and their leading words feed the encrypt IV selection pool.
+ * wire tail (see [Cpim]) and their first 16 bytes are the `spim_map_signature` input
+ * whose output feeds the tail's X field (session-19f continuation pin).
  */
 data class Spim(
     val field1: Int,
@@ -75,10 +78,12 @@ fun interface ClearAdiRng {
  * The Cpim wire tail — the 92 bytes after `[u32 BE 5][iv][u32 BE len][encout]` in the outer
  * message (live capture, session 19f: `cap_wiravec.bin`). Shape: `[X 32][u32 BE 52][u32 BE 4]
  * [Y 52]`, where the `[52][4][Y52]` group == the Spim's trailing[16:76] relayed verbatim
- * (server material) and **X (32 B) is not yet source-pinned** — TODO(live-capture) with a
- * second wire sample. The earlier §6 reading (two 256-bit sig/sha fields) is falsified: the
- * `spim_map_signature` output and the SHA-256 digest appear nowhere in the captured wire.
- * Tests seal deterministically; production wires in once X is named.
+ * (server material) and X (32 B) is live-pinned too (session 19f continuation, two runs
+ * byte-exact): X = SHA-256(encout ‖ spimMapSignature(trailing[0:16]) ‖ CONST24) — the
+ * `spim_map_signature` over the trailing's first 16 bytes feeds the digest, so neither the
+ * sig16 nor the digest of encout alone appears in the wire (the §6 "two 256-bit sig/sha
+ * fields" reading stays falsified). [CpimShaTailSeal] is the production seal; tests may
+ * seal deterministically via their own [CpimTailSeal].
  */
 fun interface CpimTailSeal {
     /**
@@ -87,6 +92,35 @@ fun interface CpimTailSeal {
      * `encrypt(sessionCtx, iv, plaintext)` output and [iv] the encrypt IV.
      */
     fun seal(spimTrailing: ByteArray, encryptedPayload: ByteArray, iv: ByteArray): ByteArray
+}
+
+/**
+ * The live-pinned production tail seal: `X = SHA-256(encout ‖ sig ‖ CONST24)` with
+ * sig = [ClearAdiProvision.spimMapSignature] over the Spim trailing's first 16 bytes
+ * (17f0921: the sig input is the trailing head, not a constant — the run-3/8/10
+ * "constant block" reading was a stale stack slot), then the digest rides the wire
+ * byte-exact (17f0d0d–17f0d63 shuffle = u32 BE pack, 17f1223 wire write) and the
+ * 60-byte relayed group follows (17f1223 wire write order: X then trailing[16:76]).
+ * The 24-B constant is at .so vaddr 0x24cf4e (appended into the hash stream at
+ * 17f0a32/17f0ad8 — a fixed protocol filler, not key material).
+ */
+object CpimShaTailSeal : CpimTailSeal {
+    private val CONST24 = byteArrayOf(
+        0x37, 0x95.toByte(), 0x02, 0x0c, 0x05, 0xf7.toByte(), 0x70, 0x09,
+        0xcb.toByte(), 0xfe.toByte(), 0xaa.toByte(), 0x78, 0xa5.toByte(), 0xbc.toByte(), 0xb3.toByte(), 0x17,
+        0x5b, 0xad.toByte(), 0x60, 0xb9.toByte(), 0xde.toByte(), 0xaa.toByte(), 0xaa.toByte(), 0x8d.toByte(),
+    )
+
+    override fun seal(spimTrailing: ByteArray, encryptedPayload: ByteArray, iv: ByteArray): ByteArray {
+        require(spimTrailing.size >= 76) {
+            "spim trailing of ${spimTrailing.size} B cannot supply the 60-byte relayed group"
+        }
+        val md = MessageDigest.getInstance("SHA-256")
+        md.update(encryptedPayload)
+        md.update(ClearAdiProvision.spimMapSignature(spimTrailing.copyOfRange(0, 16)))
+        md.update(CONST24)
+        return md.digest() + spimTrailing.copyOfRange(16, 76)
+    }
 }
 
 /**
@@ -102,8 +136,9 @@ fun interface CpimTailSeal {
  * - blob = the caller's ≤ 60-byte `extra` padded with draw3 (draw3 = the machine `mid`)
  * - gsaArg = −2 (omnisette reference), wire `FF FF FF FF FF FF FF FE` — CONFIRMED live
  * - ts = unix seconds (live: 0x6ac64ac3 ≈ provisioning wall clock)
- * - the trailing `u32 BE 1` + 12 bytes are live-pinned in position; the 12 bytes' source is
- *   TODO(live-capture) (modeled as RNG here)
+ * - the trailing `u32 BE 1` + 12 bytes are live-pinned in position; the 12 bytes are fresh
+ *   RNG draws (session-19f continuation: low bytes of 12 consecutive thread-RNG pool words,
+ *   drawn right before the IV's 16)
  * - iv = 16 RNG bytes (17f0782–17f0888 draw them from the thread RNG pool — the earlier
  *   "IV assembled from the Spim's trailing fields" reading was the RNG pool, not the Spim)
  */
