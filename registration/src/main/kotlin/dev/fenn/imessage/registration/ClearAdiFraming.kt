@@ -22,23 +22,23 @@ class SpimFormatException(message: String) : Exception(message)
  * (17efb82).
  *
  * The asm continues with trailing reads ([T;N] 17eee41, `read_bytes_const` 17eeecd — the
- * 0x20 size setup is at 17ef00b — and two u32 reads 17ef05f/17ef3e8). Empirically pinned
- * against the live library: a Spim whose bytes after the payload are ≤ 23 parses fine and
- * ≥ 24 fails with error 0x41 regardless of the payload length (60…256 tested). Their exact
- * semantics are TODO(live-capture).
+ * 0x20 size setup is at 17ef00b — and two u32 reads 17ef05f/17ef3e8). The live capture
+ * (session 19f) shows a real Spim carrying **99 trailing bytes** that parses fine — the
+ * earlier "≤ 23 leftover" pin (error 0x41) was an artifact of the probe harness, not the
+ * reader. The trailing bytes are server material the client relays verbatim into the Cpim
+ * wire tail (see [Cpim]) and their leading words feed the encrypt IV selection pool.
  */
 data class Spim(
     val field1: Int,
     val payloadLength: Int,
     val payload: ByteArray,
+    val trailing: ByteArray,
 ) {
     companion object {
         /** Minimum reader requirement (`cmp rdx,0x3; ja` 17eec6c): the first u32 must fit. */
         private const val MIN_LEN = 4
         /** `cmp QWORD PTR […],0x3b; ja` 17efb33 — the payload Vec must exceed 59 bytes. */
         private const val MIN_PAYLOAD = 60
-        /** Live-pinned leftover tolerance: > 23 trailing bytes ⇒ error 0x41. TODO(live-capture). */
-        private const val MAX_LEFTOVER = 23
 
         fun parse(bytes: ByteArray): Spim {
             if (bytes.size < MIN_LEN) throw SpimFormatException("spim shorter than the first u32 (${bytes.size} B)")
@@ -52,11 +52,8 @@ data class Spim(
                 throw SpimFormatException("spim payload of $payloadLength B rejected (must exceed 59 B, 17efb33)")
             }
             val payload = bytes.copyOfRange(8, 8 + payloadLength)
-            val leftover = bytes.size - 8 - payloadLength
-            if (leftover > MAX_LEFTOVER) {
-                throw SpimFormatException("spim has $leftover trailing bytes; the live binary tolerates ≤ 23 (error 0x41)")
-            }
-            return Spim(field1, payloadLength, payload)
+            val trailing = bytes.copyOfRange(8 + payloadLength, bytes.size)
+            return Spim(field1, payloadLength, payload, trailing)
         }
 
         private fun beU32(b: ByteArray, off: Int): Int =
@@ -75,43 +72,54 @@ fun interface ClearAdiRng {
 }
 
 /**
- * The two trailing 256-bit Cpim fields (provisioning.md §6 items 8–9, written as deku
- * `write_bits(0x100)` calls at 17effc9/17f0338/17f0444). The asm shows the material they are
- * derived from — `spim_map_signature` over a zeroed 16-byte block (17f0914–17f0931) and a
- * SHA-256 over the `encrypt(session, iv16, payload)` output, where the IV is assembled from
- * the parsed Spim's trailing fields (17f0848–17f0888) — but their exact wire assembly is not
- * provable from the dump alone: TODO(live-capture). The production seal is wired after that
- * capture; tests seal deterministically.
+ * The Cpim wire tail — the 92 bytes after `[u32 BE 5][iv][u32 BE len][encout]` in the outer
+ * message (live capture, session 19f: `cap_wiravec.bin`). Shape: `[X 32][u32 BE 52][u32 BE 4]
+ * [Y 52]`, where the `[52][4][Y52]` group == the Spim's trailing[16:76] relayed verbatim
+ * (server material) and **X (32 B) is not yet source-pinned** — TODO(live-capture) with a
+ * second wire sample. The earlier §6 reading (two 256-bit sig/sha fields) is falsified: the
+ * `spim_map_signature` output and the SHA-256 digest appear nowhere in the captured wire.
+ * Tests seal deterministically; production wires in once X is named.
  */
 fun interface CpimTailSeal {
     /**
-     * Returns the pair of 32-byte Cpim tail fields. [sessionKey] is the 16-byte session key,
-     * [encryptedPayload] the `encrypt(session, iv, payload)` output, [signatureOfZeroBlock]
-     * the `spimMapSignature(ByteArray(16))` output, [sha256OfEncrypted] the SHA-256 digest of
-     * [encryptedPayload] — everything the asm shows feeding the region.
+     * Returns the 92-byte wire tail. [spimTrailing] is the Spim's trailing byte block (the
+     * relayed `[52][4][Y52]` group comes from its bytes 16..76), [encryptedPayload] the
+     * `encrypt(sessionCtx, iv, plaintext)` output and [iv] the encrypt IV.
      */
-    fun seal(
-        sessionKey: ByteArray,
-        encryptedPayload: ByteArray,
-        signatureOfZeroBlock: ByteArray,
-        sha256OfEncrypted: ByteArray,
-    ): Pair<ByteArray, ByteArray>
+    fun seal(spimTrailing: ByteArray, encryptedPayload: ByteArray, iv: ByteArray): ByteArray
 }
 
 /**
- * The Cpim wire bytes (`new()`'s deku Writer output, provisioning.md §6 items 1–9):
+ * The Cpim wire message (`request.cpim`, base64) — live-pinned from the session-19f capture
+ * (`cap_wiravec.bin`, 276 B; the earlier §6 208-B reading is superseded):
  *
- * 1. `00 00 00 20` u32 BE (17efe9b) — the Vec length prefix of item 2
- * 2. `encsec(draw2)` (Vec#1, 32 B — encsec call 17efd5e on the second RNG draw)
- * 3. `00 00 00 20` u32 BE — length prefix of item 4
- * 4. `draw1` raw (Vec#2, 32 B — the first RNG draw copied untouched, 17efc95)
- * 5. the 60-byte blob: the caller's ≤ 60-byte `extra` slice, padded with the third RNG draw
- *    (the extra memcpy 17efb21 lands on the draw-3 slot, then the struct copy 17efcb5 takes
- *    exactly 60 bytes into the Cpim struct)
- * 6. [gsaArg] as u64 BE — the omnisette reference passes −2 ("GSA"): `FF FF FF FF FF FF FF FE`
- * 7. u32 BE — `bswap` of the little-endian dword at draw3[8..12] (17efc3c → struct +0x7c)
- * 8–9. the two 256-bit [CpimTailSeal] fields — TODO(live-capture)
+ * `[u32 BE 5][iv 16][u32 BE 160][encout 160][CpimTailSeal 92]`
+ *
+ * `encout = encrypt(sessionCtx, iv, plaintext)` (17f090e), plaintext 160 B =
+ * `[u32 BE 32][vec1 32][u32 BE 32][vec2 32][blob 60][gsaArg u64 BE][ts u32 BE][u32 BE 1][tail 12]`:
+ * - vec1 = [ClearAdiProvision.encsec] of draw2 (the sealed client secret)
+ * - vec2 = draw1 raw — the 32-B gate material echoed back by the server's PTM
+ * - blob = the caller's ≤ 60-byte `extra` padded with draw3 (draw3 = the machine `mid`)
+ * - gsaArg = −2 (omnisette reference), wire `FF FF FF FF FF FF FF FE` — CONFIRMED live
+ * - ts = unix seconds (live: 0x6ac64ac3 ≈ provisioning wall clock)
+ * - the trailing `u32 BE 1` + 12 bytes are live-pinned in position; the 12 bytes' source is
+ *   TODO(live-capture) (modeled as RNG here)
+ * - iv = 16 RNG bytes (17f0782–17f0888 draw them from the thread RNG pool — the earlier
+ *   "IV assembled from the Spim's trailing fields" reading was the RNG pool, not the Spim)
  */
+data class CpimBuilt(
+    /** The full wire message — base64 it into `request.cpim`. */
+    val wire: ByteArray,
+    /** RNG draw 1 — the 32-B gate material the server's PTM must echo (decrypt out[408:440]). */
+    val draw1: ByteArray,
+    /** RNG draw 2 — becomes `client_secret`. */
+    val draw2: ByteArray,
+    /** RNG draw 3 (60 B) — becomes the machine `mid`. */
+    val draw3: ByteArray,
+    /** The 16-B encrypt IV, echoed in the clear at wire[4:20]. */
+    val iv: ByteArray,
+)
+
 object Cpim {
 
     /** `extra` must fit the fixed 60-byte blob slot (`cmp rdx,0x3d; jae` → error, 17efb17). */
@@ -122,46 +130,44 @@ object Cpim {
         rng: ClearAdiRng,
         extra: ByteArray,
         gsaArg: Long,
+        nowSeconds: Long,
         sessionCtx: ByteArray,
         payload240: ByteArray,
-        tail: CpimTailSeal?,
-    ): ByteArray {
+        spimTrailing: ByteArray,
+        tail: CpimTailSeal,
+    ): CpimBuilt {
         require(extra.size <= MAX_EXTRA) { "extra blob of ${extra.size} B exceeds the 60 B Cpim slot (17efb17)" }
         val draw1 = rng.draw(32)
         val draw2 = rng.draw(32)
         val draw3 = rng.draw(60)
+        val iv = rng.draw(16)
         val vec1 = ClearAdiProvision.encsec(draw2)
         val blob = extra + draw3.copyOfRange(extra.size, BLOB_LEN)
-        val item7 = leU32(draw3, 8)
 
-        val out = ByteArray(4 + 32 + 4 + 32 + BLOB_LEN + 8 + 4 + 32 + 32)
+        val plain = ByteArray(4 + 32 + 4 + 32 + BLOB_LEN + 8 + 4 + 4 + 12)
         var p = 0
-        p = putBeU32(out, p, 32)
-        System.arraycopy(vec1, 0, out, p, vec1.size); p += vec1.size
-        p = putBeU32(out, p, 32)
-        System.arraycopy(draw1, 0, out, p, draw1.size); p += draw1.size
-        System.arraycopy(blob, 0, out, p, blob.size); p += blob.size
-        p = putBeU64(out, p, gsaArg)
-        p = putBeU32(out, p, item7)
-        if (tail == null) {
-            throw IllegalStateException(
-                "Cpim tail fields (§6 items 8–9) need the live capture — no CpimTailSeal supplied (TODO(live-capture))",
-            )
-        }
-        val iv16 = ByteArray(16) // IV assembled from the Spim's trailing fields — TODO(live-capture)
-        val encrypted = ClearAdiProvision.encrypt(sessionCtx, iv16, payload240)
-        val digest = java.security.MessageDigest.getInstance("SHA-256").digest(encrypted)
-        val signature = ClearAdiProvision.spimMapSignature(ByteArray(16))
-        val (field8, field9) = tail.seal(
-            ClearAdiProvision.sessionKey(sessionCtx),
-            encrypted,
-            signature,
-            digest,
-        )
-        require(field8.size == 32 && field9.size == 32) { "Cpim tail fields must be 32 B each" }
-        System.arraycopy(field8, 0, out, p, 32); p += 32
-        System.arraycopy(field9, 0, out, p, 32); p += 32
-        return out.copyOf(p)
+        p = putBeU32(plain, p, 32)
+        System.arraycopy(vec1, 0, plain, p, vec1.size); p += vec1.size
+        p = putBeU32(plain, p, 32)
+        System.arraycopy(draw1, 0, plain, p, draw1.size); p += draw1.size
+        System.arraycopy(blob, 0, plain, p, blob.size); p += blob.size
+        p = putBeU64(plain, p, gsaArg)
+        p = putBeU32(plain, p, (nowSeconds and 0xffffffffL).toInt())
+        p = putBeU32(plain, p, 1)
+        System.arraycopy(rng.draw(12), 0, plain, p, 12); p += 12
+        require(p == plain.size)
+
+        val encrypted = ClearAdiProvision.encrypt(sessionCtx, iv, plain)
+        require(encrypted.size == plain.size)
+        val wire = ByteArray(4 + 16 + 4 + encrypted.size + 92)
+        var q = 0
+        q = putBeU32(wire, q, 5)
+        System.arraycopy(iv, 0, wire, q, iv.size); q += iv.size
+        q = putBeU32(wire, q, encrypted.size)
+        System.arraycopy(encrypted, 0, wire, q, encrypted.size); q += encrypted.size
+        System.arraycopy(tail.seal(spimTrailing, encrypted, iv), 0, wire, q, 92); q += 92
+        require(q == wire.size)
+        return CpimBuilt(wire, draw1, draw2, draw3, iv)
     }
 
     private fun putBeU32(b: ByteArray, off: Int, v: Int): Int {
@@ -174,77 +180,84 @@ object Cpim {
         for (i in 0 until 8) b[off + i] = (v ushr (56 - 8 * i)).toByte()
         return off + 8
     }
-
-    private fun leU32(b: ByteArray, off: Int): Int =
-        (b[off].toInt() and 0xff) or ((b[off + 1].toInt() and 0xff) shl 8) or
-            ((b[off + 2].toInt() and 0xff) shl 16) or ((b[off + 3].toInt() and 0xff) shl 24)
 }
 
 /**
- * The parsed Ptm (finish-provisioning `Response.ptm`, base64 on the wire). Same reader family
- * as [Spim] (finish.asm 17f1f1e–17f2294): `field1` u32 BE first, then a lenient Vec (every
- * candidate shape accepted by the live binary, error 0) whose bytes feed
- * [ClearAdiProvision.decryptPtm] with `count = payload.size / 16` (17f2548).
- * The live binary accepts every candidate shape thrown at it (u32 alone through 128 B tails,
- * all error 0) — the trailing [T;N]/read_bytes_const/u32 reads (17f1f6a/17f1fd4/17f20e5) are
- * lenient; their exact semantics TODO(live-capture).
+ * The parsed Ptm (finish-provisioning `Response.ptm`, base64 on the wire) — live-pinned from
+ * the session-19f capture (`cap_ptm.bin`, 503 B): the finish reader's u32/[T;N]/const-bytes/
+ * u32/Vec sequence (17f1f1e–17f2294) resolves to
+ * `[u32 BE field1][seed 16][u32 BE payloadLen][payload payloadLen][trailing]` — live sample:
+ * field1=4, seed=ptm[4:20], payloadLen=448, payload=ptm[24:472]. The [seed] is the
+ * `decryptPTM` chain seed (finish 17f2557's rcx — confirmed live = ptm[4:20]) and [payload]
+ * feeds [ClearAdiProvision.decryptPtm] with `count = payload.size / 16` (17f2548).
  */
 data class Ptm(
     val field1: Int,
+    val seed: ByteArray,
     val payload: ByteArray,
+    val trailing: ByteArray,
 ) {
     companion object {
-        /** Minimum reader requirement (finish `cmp …,0x3; ja` 17f1eec → 17f1f1e). */
-        private const val MIN_LEN = 4
+        /** u32 + seed + u32 (the live sample's field1 = 4; role of the leading u32 unpinned). */
+        private const val HEADER = 24
 
         fun parse(bytes: ByteArray): Ptm {
-            if (bytes.size < MIN_LEN) throw SpimFormatException("ptm shorter than the first u32 (${bytes.size} B)")
-            val field1 = ((bytes[0].toInt() and 0xff) shl 24) or ((bytes[1].toInt() and 0xff) shl 16) or
-                ((bytes[2].toInt() and 0xff) shl 8) or (bytes[3].toInt() and 0xff)
-            // Lenient Vec: takes the whole tail after the first u32 — the live binary accepts
-            // every candidate shape (u32 alone through 128 B tails, all error 0), so field1
-            // is not enforced as a length (its role is TODO(live-capture)).
-            return Ptm(field1, bytes.copyOfRange(4, bytes.size))
+            if (bytes.size < HEADER) throw SpimFormatException("ptm shorter than its 24-B header (${bytes.size} B)")
+            val field1 = beU32At(bytes, 0)
+            val seed = bytes.copyOfRange(4, 20)
+            val payloadLength = beU32At(bytes, 20)
+            if (24 + payloadLength > bytes.size) {
+                throw SpimFormatException("ptm payload Vec needs $payloadLength B, ${bytes.size - 24} available")
+            }
+            val payload = bytes.copyOfRange(24, 24 + payloadLength)
+            val trailing = bytes.copyOfRange(24 + payloadLength, bytes.size)
+            return Ptm(field1, seed, payload, trailing)
         }
+
+        private fun beU32At(b: ByteArray, off: Int): Int =
+            ((b[off].toInt() and 0xff) shl 24) or ((b[off + 1].toInt() and 0xff) shl 16) or
+                ((b[off + 2].toInt() and 0xff) shl 8) or (b[off + 3].toInt() and 0xff)
     }
 }
 
 /**
- * `finish()`'s return — the raw 0x78-byte ProvisionedData struct (17f2dec–17f2e56):
- * +0x00 16 B, +0x10 u64, +0x18 u64, +0x20 16 B, +0x30..0x70 64 B (metadata blob), +0x70 u32,
- * +0x74 u8 (flavor). Which bytes are `mid` vs `client_secret` is NOT provable from the dump
- * (an OpenBubbles provisioning run under gdb is pending) — the cross-check against the
- * OTP-path report's ProvisionedMachine (client_info 400/208 B, mid 32 B, secret 60 B,
- * flavor) is likewise unconfirmed: TODO(live-capture) on the field mapping. Named accessors
- * only; nothing is invented.
+ * `finish()`'s ProvisionedData — live-pinned from the session-19f capture (`cap_provisioned.bin`,
+ * 0x78 B at 17f2e5a): a Rust struct `{metadata: Vec<u8>, client_secret: [u8;32], mid: [u8;60],
+ * flavor: u8}` — NOT the decrypt output itself:
+ * - metadata = the decrypt output's Vec content (length = the u32 BE at out[0]; 400 B live)
+ * - client_secret = the session's RNG draw 2 (ctx+0x2910; live byte-verified)
+ * - mid = the session's RNG draw 3 (ctx+0x2930; live byte-verified)
+ * - the struct's flavor byte (ctx+0x296c = 0x01 in the live Mac run) uses its own numbering —
+ *   distinct from the ClearAdiOtp flavor convention, so it is carried raw here.
+ * The finish gate (17f2cd7–17f2d0d, decrypt staging vs ctx+0x28f0) is the decrypt output's
+ * **out[408:440] == draw1** echo — the earlier "out[0:32]" reading was wrong.
  */
-data class ProvisionedData(val raw: ByteArray) {
-    init {
-        require(raw.size >= 0x78) { "ProvisionedData must be 0x78 bytes, got ${raw.size}" }
-    }
+data class ProvisionedData(
+    val metadata: ByteArray,
+    val clientSecret: ByteArray,
+    val mid: ByteArray,
+) {
+    companion object {
+        /** Gate echo position in the decrypt output (out[408:440] == RNG draw 1). */
+        const val GATE_AT = 408
 
-    /** +0x00, 16 B (role unproven). */
-    val block00: ByteArray get() = raw.copyOfRange(0x00, 0x10)
-    /** +0x10, u64 LE (role unproven). */
-    val word10: Long get() = le64(raw, 0x10)
-    /** +0x18, u64 LE (role unproven). */
-    val word18: Long get() = le64(raw, 0x18)
-    /** +0x20, 16 B (role unproven). */
-    val block20: ByteArray get() = raw.copyOfRange(0x20, 0x30)
-    /** +0x30..0x70, 64 B — the metadata blob per the OTP-path report's layout cross-check. */
-    val metadata64: ByteArray get() = raw.copyOfRange(0x30, 0x70)
-    /** +0x70, u32 LE. */
-    val word70: Int get() = le32(raw, 0x70)
-    /** +0x74, u8 — the flavor byte (Mac = 0, IOS = 1, per the ClearAdiOtp flavor convention). */
-    val flavor: Int get() = raw[0x74].toInt() and 0xff
+        /**
+         * Assembles ProvisionedData from the [ClearAdiProvision.decryptPtm] output. [out] must
+         * carry `u32 BE metaLen` at 0, the metadata at 4, and the draw-1 echo at [GATE_AT] —
+         * a mismatch throws (the server's PTM did not echo our gate material).
+         */
+        fun fromDecrypt(out: ByteArray, draw1: ByteArray, draw2: ByteArray, draw3: ByteArray): ProvisionedData {
+            require(out.size >= GATE_AT + 32 + 4) { "decryptPTM output too short: ${out.size} B" }
+            val metaLen = beU32(out, 0)
+            require(4 + metaLen <= out.size) { "decryptPTM metadata length $metaLen exceeds the output" }
+            require(out.copyOfRange(GATE_AT, GATE_AT + 32).contentEquals(draw1)) {
+                "PTM gate mismatch: the decrypted PTM does not echo the client gate material (17f2cd7)"
+            }
+            return ProvisionedData(out.copyOfRange(4, 4 + metaLen), draw2, draw3)
+        }
 
-    private fun le32(b: ByteArray, off: Int): Int =
-        (b[off].toInt() and 0xff) or ((b[off + 1].toInt() and 0xff) shl 8) or
-            ((b[off + 2].toInt() and 0xff) shl 16) or ((b[off + 3].toInt() and 0xff) shl 24)
-
-    private fun le64(b: ByteArray, off: Int): Long {
-        var v = 0L
-        for (i in 7 downTo 0) v = (v shl 8) or (b[off + i].toLong() and 0xff)
-        return v
+        private fun beU32(b: ByteArray, off: Int): Int =
+            ((b[off].toInt() and 0xff) shl 24) or ((b[off + 1].toInt() and 0xff) shl 16) or
+                ((b[off + 2].toInt() and 0xff) shl 8) or (b[off + 3].toInt() and 0xff)
     }
 }

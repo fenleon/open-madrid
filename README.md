@@ -12,13 +12,13 @@ Validated:
 - The registration chain ran live against Apple (2026-10-02→04, spec rev 26): Albert activation, the packed APNs courier, the full GSA sign-in (SRP, trusted-device 2FA, PET delivery, postdata), then IDS authenticate and register — both green, `mailto:` handle active. The earlier 409 refusals turned out to be Apple's validation-stamp replay guard (one mint = one device record), documented in the spec.
 - Two live unauthenticated probes against Apple succeeded: both bag endpoints return plists this stack parses, and certificate pinning validates Apple's real TLS chains. A drift check ships with the repo (`:engine:runProbe`).
 - The courier's auth model is settled: the packed path needs no client certificate; the legacy path answers the handshake with a TLS 1.3 post-handshake `certificate_required` alert.
-- The ADI anisette crypto is reimplemented natively, no emulation or helper binary: the white-box OTP ciphers, the GSA provisioning exchange, and the spim/cpim/ptm wire framing are transcribed clean-room from analysis of a compiled ADI implementation and verified byte-exact against oracle vectors (192 tests green, spec rev 27). No anisette server, no Unicorn, no Mac relay.
+- The ADI anisette crypto is reimplemented natively, no emulation or helper binary: the white-box OTP ciphers, the GSA provisioning exchange, and the spim/cpim/ptm wire framing are transcribed clean-room from analysis of a compiled ADI implementation and verified byte-exact against oracle vectors, then live-confirmed against a genuine client's provisioning run under an instrumented debugger (194 tests green, spec rev 28). No anisette server, no Unicorn, no Mac relay.
 
 Not validated yet:
 
 - No real message send or receive over the courier; renewal across sessions is untested.
 - The crypto envelopes have round-trip tests but no known-answer vectors from a live device.
-- The ADI provisioning exchange has not yet run against Apple's live servers; two wire details (two cpim signature fields, the provisioned-state byte mapping) await one instrumented observation of a genuine client and are `TODO(capture)` in the code and spec.
+- The ADI provisioning wire shapes were confirmed from an instrumented genuine client (spec rev 28): the provisioned-state mapping (metadata/client-secret/mid/flavor), the PTM layout with its embedded decrypt seed, the 276-byte cpim outer message, and the gate echo position are all live-pinned. Three byte groups remain `TODO(capture)`: the 32-byte cpim tail group, the 12-byte plaintext tail, and the spim trailing's first 16 bytes.
 - A few wire details are capture-bound guesses, tracked in the spec's open-questions checklist.
 - PQ3 is unsupported.
 

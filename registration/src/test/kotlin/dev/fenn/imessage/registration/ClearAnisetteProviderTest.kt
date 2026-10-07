@@ -13,9 +13,10 @@ import kotlin.test.assertTrue
 
 /**
  * Tests for the wire-level ClearADI provider (ClearAdiFraming + ClearAnisetteProvider).
- * The framing facts come from new.asm/finish.asm plus live-oracle probes of
- * librust_lib_bluebubbles (see WORKLOG session 19e); everything the probes could not pin is
- * TODO(live-capture) in the code and asserted only at the shape level here.
+ * Framing facts: new.asm/finish.asm plus the session-19f LIVE captures (WIRE-NOTES.md,
+ * dev/clearadi/captures/). The scripted HTTP flow exercises everything up to the PTM gate —
+ * faking a gate-valid PTM would need Apple's PTM encryptor, so the full-gate path is asserted
+ * at the data level ([ProvisionedData.fromDecrypt]) instead.
  */
 class ClearAnisetteProviderTest {
 
@@ -29,18 +30,18 @@ class ClearAnisetteProviderTest {
     @Test
     fun spimParseExtractsFields() {
         val payload = ByteArray(240) { it.toByte() }
-        val spim = Spim.parse(spimBytes(field1 = 0x01020304, payload = payload, tail = ByteArray(23)))
+        val tail = ByteArray(99) { 0x55.toByte() } // the live Spim carries 99 trailing bytes
+        val spim = Spim.parse(spimBytes(field1 = 0x01020304, payload = payload, tail = tail))
         assertEquals(0x01020304, spim.field1)
         assertEquals(240, spim.payloadLength)
         assertContentEquals(payload, spim.payload)
+        assertContentEquals(tail, spim.trailing)
     }
 
     @Test
-    fun spimParseRejectsShortPayloadAndBadLeftover() {
+    fun spimParseRejectsShortPayloadAndTruncation() {
         // payload ≤ 59 B rejected (17efb33)
         assertFailsWith<SpimFormatException> { Spim.parse(spimBytes(payload = ByteArray(59))) }
-        // > 23 trailing bytes rejected (live-pinned error 0x41)
-        assertFailsWith<SpimFormatException> { Spim.parse(spimBytes(tail = ByteArray(24))) }
         // truncated header
         assertFailsWith<SpimFormatException> { Spim.parse(ByteArray(3)) }
         // payload length beyond the buffer
@@ -51,60 +52,86 @@ class ClearAnisetteProviderTest {
 
     // ---- Cpim build ----------------------------------------------------------
 
-    /** Deterministic RNG: draws are 0x10, 0x20, 0x30-filled blocks (draw1, draw2, draw3). */
+    /** Deterministic RNG: draws are 0x10/0x20/0x30/0x40/0x50-filled (draw1, draw2, draw3, iv, tail12). */
     private class FixedRng : ClearAdiRng {
         var n = 0
         override fun draw(n: Int): ByteArray {
-            val fill = when (++this.n) { 1 -> 0x10; 2 -> 0x20; else -> 0x30 }.toByte()
+            val fill = when (++this.n) { 1 -> 0x10; 2 -> 0x20; 3 -> 0x30; 4 -> 0x40; else -> 0x50 }.toByte()
             return ByteArray(n) { fill }
         }
     }
 
-    private val seal = CpimTailSeal { _, _, sig, digest ->
-        // the two 256-bit fields: shape-only seal so the test is deterministic
-        sig.copyOf(32) to digest
+    /**
+     * The live wire tail: `[X 32][u32 BE 52][u32 BE 4][Y 52]` — the 60-byte
+     * `[52][4][Y52]` group == the Spim's trailing[16:76] relayed verbatim (server material)
+     * and **X (32 B) is the one TODO(live-capture) byte group**, zero-filled here.
+     */
+    private val seal = CpimTailSeal { spimTrailing, _, _ ->
+        ByteArray(32) + spimTrailing.copyOfRange(16, 76)
     }
 
     @Test
-    fun cpimBuildMatchesAsmLayout() {
+    fun cpimBuildMatchesLiveWireLayout() {
         val extra = ByteArray(10) { 0xAB.toByte() }
+        val trailing = ByteArray(99) { (it + 1).toByte() }
         val session = ClearAdiProvision.initSession(ByteArray(240))
-        val cpim = Cpim.build(FixedRng(), extra, -2L, session, ByteArray(240), seal)
-        // 4+32+4+32+60+8+4+32+32
-        assertEquals(208, cpim.size)
-        assertEquals(32, readBeU32(cpim, 0))
-        // vec1 = encsec(draw2) — encsec is deterministic, so byte-exact here
-        assertContentEquals(ClearAdiProvision.encsec(ByteArray(32) { 0x20.toByte() }), cpim.copyOfRange(4, 36))
-        assertEquals(32, readBeU32(cpim, 36))
-        assertContentEquals(ByteArray(32) { 0x10.toByte() }, cpim.copyOfRange(40, 72)) // draw1 raw
-        // blob = extra ‖ draw3 padding
-        assertContentEquals(extra, cpim.copyOfRange(72, 82))
-        assertContentEquals(ByteArray(50) { 0x30.toByte() }, cpim.copyOfRange(82, 132))
-        // arg9 = −2 as u64 BE (omnisette "GSA")
-        assertEquals(-2L, readBeU64(cpim, 132))
-        assertContentEquals(hex("FFFFFFFFFFFFFFFE"), cpim.copyOfRange(132, 140))
-        // item 7 = BE u32 of the LE dword at draw3[8..12] — draw3 is 0x30-filled ⇒ 0x30303030
-        assertEquals(0x30303030, readBeU32(cpim, 140))
-        // tail fields present, 32 B each (items 8–9 = 64 B after the 144 B prefix)
-        assertEquals(64, cpim.size - 144)
+        val built = Cpim.build(FixedRng(), extra, -2L, 1_700_000_000L, session, ByteArray(240), trailing, seal)
+        // outer: [u32 BE 5][iv 16][u32 BE 160][encout 160][tail 92]
+        assertEquals(276, built.wire.size)
+        assertEquals(5, readBe(built.wire, 0))
+        assertContentEquals(ByteArray(16) { 0x40.toByte() }, built.iv)
+        assertContentEquals(built.iv, built.wire.copyOfRange(4, 20))
+        assertEquals(160, readBe(built.wire, 20))
+        // plaintext rebuilt from the same draws → encout must match the real cipher
+        val vec1 = ClearAdiProvision.encsec(ByteArray(32) { 0x20.toByte() })
+        val plain = ByteArray(160)
+        var p = 0
+        p = putBe(plain, p, 32, 4)
+        System.arraycopy(vec1, 0, plain, p, 32); p += 32
+        p = putBe(plain, p, 32, 4)
+        System.arraycopy(ByteArray(32) { 0x10.toByte() }, 0, plain, p, 32); p += 32 // draw1 = vec2 raw
+        System.arraycopy(extra, 0, plain, p, extra.size); p += extra.size
+        System.arraycopy(ByteArray(50) { 0x30.toByte() }, 0, plain, p, 50); p += 50 // blob = extra ‖ draw3
+        p = putBe(plain, p, -2L, 8)
+        p = putBe(plain, p, 1_700_000_000L, 4)
+        p = putBe(plain, p, 1, 4)
+        System.arraycopy(ByteArray(12) { 0x50.toByte() }, 0, plain, p, 12); p += 12
+        val encout = ClearAdiProvision.encrypt(session, built.iv, plain)
+        assertContentEquals(encout, built.wire.copyOfRange(24, 184))
+        // the seal's relayed group comes from the Spim trailing
+        assertContentEquals(trailing.copyOfRange(16, 76), built.wire.copyOfRange(216, 276))
+        // draws surface for the finish side
+        assertContentEquals(ByteArray(32) { 0x10.toByte() }, built.draw1)
+        assertContentEquals(ByteArray(32) { 0x20.toByte() }, built.draw2)
+        assertContentEquals(ByteArray(60) { 0x30.toByte() }, built.draw3)
     }
 
     @Test
     fun cpimBuildRejectsOversizeExtra() {
         assertFailsWith<IllegalArgumentException> {
-            Cpim.build(FixedRng(), ByteArray(61), -2L, ByteArray(0x28F0), ByteArray(240), seal)
+            Cpim.build(FixedRng(), ByteArray(61), -2L, 0L, ByteArray(0x28F0), ByteArray(240), ByteArray(0), seal)
         }
     }
 
-    // ---- Ptm parse / tk check ------------------------------------------------
+    // ---- Ptm parse (live-pinned layout) ---------------------------------------
 
     @Test
-    fun ptmParseTakesField1AndPayload() {
-        val ptm = Ptm.parse(hex("00000001") + ByteArray(32))
-        assertEquals(1, ptm.field1)
-        assertEquals(32, ptm.payload.size)
-        // lenient Vec: field1 clipped to what the buffer holds (live-pinned)
-        assertEquals(4, Ptm.parse(hex("FFFFFFFF") + ByteArray(4)).payload.size)
+    fun ptmParsePinnedLayout() {
+        val seed = ByteArray(16) { 0x11.toByte() }
+        val payload = ByteArray(448) { 0x22.toByte() }
+        val trailing = ByteArray(31) { 0x33.toByte() }
+        val ptm = Ptm.parse(
+            beBytes(4, 4) + seed + beBytes(448, 4) + payload + trailing,
+        )
+        assertEquals(4, ptm.field1)
+        assertContentEquals(seed, ptm.seed)
+        assertContentEquals(payload, ptm.payload)
+        assertContentEquals(trailing, ptm.trailing)
+        // payload length beyond the buffer
+        val short = beBytes(4, 4) + seed + beBytes(999, 4)
+        assertFailsWith<SpimFormatException> { Ptm.parse(short) }
+        // truncated header
+        assertFailsWith<SpimFormatException> { Ptm.parse(ByteArray(23)) }
     }
 
     @Test
@@ -115,17 +142,43 @@ class ClearAnisetteProviderTest {
         assertTrue(ex.message!!.contains("tk not exactly 16 bytes"))
     }
 
-    // ---- ProvisionedData raw layout ------------------------------------------
+    // ---- ProvisionedData assembly + gate ---------------------------------------
+
+    private fun syntheticDecryptOut(draw1: ByteArray): ByteArray {
+        val out = ByteArray(448)
+        putBe(out, 0, 400, 4)
+        for (i in 4 until 404) out[i] = i.toByte()
+        draw1.copyInto(out, 408)
+        return out
+    }
 
     @Test
-    fun provisionedDataExposesRawLayout() {
-        val raw = ByteArray(0x78) { (it + 1).toByte() }
-        val data = ProvisionedData(raw)
-        assertEquals(16, data.block00.size)
-        // little-endian u64 of bytes 0x11..0x18
-        assertEquals(0x1817161514131211UL.toLong(), data.word10)
-        assertEquals(64, data.metadata64.size)
-        assertEquals(0x75, data.flavor) // raw[0x74] = (0x74 + 1)
+    fun provisionedDataAssemblesFromDecryptOutput() {
+        val draw1 = ByteArray(32) { 0x10.toByte() }
+        val draw2 = ByteArray(32) { 0x20.toByte() }
+        val draw3 = ByteArray(60) { 0x30.toByte() }
+        val out = syntheticDecryptOut(draw1)
+        val data = ProvisionedData.fromDecrypt(out, draw1, draw2, draw3)
+        assertEquals(400, data.metadata.size)
+        assertEquals(25.toByte(), data.metadata[21])
+        assertContentEquals(draw2, data.clientSecret)
+        assertContentEquals(draw3, data.mid)
+    }
+
+    @Test
+    fun provisionedDataRejectsGateMismatchAndShortOutput() {
+        val draw1 = ByteArray(32) { 0x10.toByte() }
+        val draw2 = ByteArray(32) { 0x20.toByte() }
+        val draw3 = ByteArray(60) { 0x30.toByte() }
+        val wrongEcho = syntheticDecryptOut(ByteArray(32) { 0xEE.toByte() })
+        val ex = assertFailsWith<IllegalArgumentException> {
+            ProvisionedData.fromDecrypt(wrongEcho, draw1, draw2, draw3)
+        }
+        assertTrue(ex.message!!.contains("PTM gate mismatch"))
+        val ex2 = assertFailsWith<IllegalArgumentException> {
+            ProvisionedData.fromDecrypt(ByteArray(100), draw1, draw2, draw3)
+        }
+        assertTrue(ex2.message!!.contains("too short"))
     }
 
     // ---- header assembly -----------------------------------------------------
@@ -175,28 +228,50 @@ class ClearAnisetteProviderTest {
     // ---- state round-trip + full scripted flow --------------------------------
 
     @Test
-    fun provisionResultJsonRoundTrip() {
-        val raw = ByteArray(0x78) { it.toByte() }
-        val result = ClearAdiProvisionResult(ProvisionedData(raw), "1710631289")
-        val restored = resultFromJson(resultToJson(result))
-        assertContentEquals(raw, restored.provisionedData.raw)
-        assertEquals("1710631289", restored.rinfo)
+    fun provisionedAnisetteJsonRoundTrip() {
+        val anisette = ProvisionedAnisette(
+            clientSecret = ByteArray(32) { 1 },
+            mid = ByteArray(60) { 2 },
+            metadata = ByteArray(400) { 3 },
+            rinfo = "1710631289",
+            flavor = ClearAnisetteProvider.FLAVOR_MAC,
+        )
+        val restored = ProvisionedAnisette.fromJson(anisette.toJson())
+        assertContentEquals(anisette.clientSecret, restored.clientSecret)
+        assertContentEquals(anisette.mid, restored.mid)
+        assertContentEquals(anisette.metadata, restored.metadata)
+        assertEquals(anisette.rinfo, restored.rinfo)
+        assertEquals(anisette.flavor, restored.flavor)
     }
 
     @Test
-    fun provisionFlowsThroughScriptedHttp() = kotlinx.coroutines.runBlocking {
+    fun provisionFlowsThroughScriptedHttpToTheGate() = kotlinx.coroutines.runBlocking {
         val http = ScriptedIdsHttp()
+        val provider = provider(http = http)
+        // the scripted PTM cannot echo the gate (faking that needs Apple's PTM encryptor),
+        // so the live-shaped flow must fail exactly at the gate check
+        val ex = assertFailsWith<IllegalArgumentException> { provider.provision() }
+        assertTrue(ex.message!!.contains("PTM gate mismatch"))
+        assertEquals(3, http.calls) // lookup + start + finish
+    }
+
+    @Test
+    fun secondEnsureCallIsServedFromStore() = kotlinx.coroutines.runBlocking {
         val store = MemoryStateStore()
-        val provider = provider(http = http, store = store)
-        val result = provider.ensureProvisioned()
-        assertEquals(0x78, result.provisionedData.raw.size)
-        assertEquals("1710631289", result.rinfo)
-        // second call is served from the store without new HTTP traffic
-        val callsAfterFirst = http.calls
+        store.save(
+            ProvisionedAnisette(
+                clientSecret = ByteArray(32) { 1 },
+                mid = ByteArray(60) { 2 },
+                metadata = ByteArray(400) { 3 },
+                rinfo = "1710631289",
+                flavor = ClearAnisetteProvider.FLAVOR_MAC,
+            ).toJson(),
+        )
+        val provider = provider(http = ScriptedIdsHttp(), store = store)
+        val first = provider.ensureProvisioned()
+        assertEquals("1710631289", first.rinfo)
         val second = provider.ensureProvisioned()
-        assertEquals(callsAfterFirst, http.calls)
-        assertContentEquals(result.provisionedData.raw, second.provisionedData.raw)
-        assertTrue(store.saved!!.contains("provisioned_data"))
+        assertContentEquals(first.clientSecret, second.clientSecret)
     }
 
     private fun provider(http: ScriptedIdsHttp, store: ClearAdiStateStore = MemoryStateStore()): ClearAnisetteProvider =
@@ -206,7 +281,6 @@ class ClearAnisetteProviderTest {
             loginInfo = ClearAdiLoginInfo("akd-user-agent/1", "com.apple.mme/1 (MacBookPro18,1)"),
             rng = FixedRng(),
             cpimTailSeal = seal,
-            finishSeed = ByteArray(16),
             keychainIdentifier = hex("000102030405060708090a0b0c0d0e0f"),
             clock = { 1_700_000_000_000L },
         )
@@ -250,7 +324,7 @@ class ClearAnisetteProviderTest {
                     200,
                     emptyMap(),
                     XmlPlist.encode(
-                        mapOf("Response" to mapOf("spim" to Base64.getEncoder().encodeToString(buildSpim()))),
+                        mapOf("Response" to mapOf("spim" to Base64.getEncoder().encodeToString(buildSpim(tail = ByteArray(99))))),
                     ),
                 )
             } else {
@@ -258,14 +332,20 @@ class ClearAnisetteProviderTest {
                 @Suppress("UNCHECKED_CAST")
                 val request = (bodyPlist as Map<String, Any?>)["request"] as Map<String, String>
                 assertTrue(request.containsKey("cpim"))
+                val cpim = Base64.getDecoder().decode(request["cpim"]!!)
+                // outer shape: [u32 BE 5][iv 16][u32 BE 160][encout 160][tail 88]
+                assertEquals(276, cpim.size)
+                assertEquals(160, readBe(cpim, 20))
                 IdsHttpResponse(
                     200,
                     emptyMap(),
                     XmlPlist.encode(
                         mapOf(
                             "Response" to mapOf(
-                                // 240 B ptm ⇒ 15 decrypt blocks ⇒ ≥ 0x78 ProvisionedData source
-                                "ptm" to Base64.getEncoder().encodeToString(ByteArray(240)),
+                                // live-shaped: [u32 BE 4][seed 16][u32 BE 448][payload 448][tail 31]
+                                "ptm" to Base64.getEncoder().encodeToString(
+                                    beBytes(4, 4) + ByteArray(16) + beBytes(448, 4) + ByteArray(448) + ByteArray(31),
+                                ),
                                 "tk" to Base64.getEncoder().encodeToString(ByteArray(tkSize)),
                                 "X-Apple-I-MD-RINFO" to "1710631289",
                             ),
@@ -282,15 +362,17 @@ class ClearAnisetteProviderTest {
         }
     }
 
-    private fun readBeU32(b: ByteArray, off: Int): Int =
-        ((b[off].toInt() and 0xff) shl 24) or ((b[off + 1].toInt() and 0xff) shl 16) or
-            ((b[off + 2].toInt() and 0xff) shl 8) or (b[off + 3].toInt() and 0xff)
+}
 
-    private fun readBeU64(b: ByteArray, off: Int): Long {
-        var v = 0L
-        for (i in 0 until 8) v = (v shl 8) or (b[off + i].toLong() and 0xff)
-        return v
-    }
+private fun readBe(b: ByteArray, off: Int): Int =
+    ((b[off].toInt() and 0xff) shl 24) or ((b[off + 1].toInt() and 0xff) shl 16) or
+        ((b[off + 2].toInt() and 0xff) shl 8) or (b[off + 3].toInt() and 0xff)
+
+private fun beBytes(v: Long, n: Int): ByteArray = ByteArray(n) { (v ushr (8 * (n - 1 - it))).toByte() }
+
+private fun putBe(dst: ByteArray, off: Int, v: Long, n: Int): Int {
+    for (i in 0 until n) dst[off + i] = (v ushr (8 * (n - 1 - i))).toByte()
+    return off + n
 }
 
 private fun buildSpim(field1: Int = 0, payload: ByteArray = ByteArray(240), tail: ByteArray = ByteArray(0)): ByteArray {

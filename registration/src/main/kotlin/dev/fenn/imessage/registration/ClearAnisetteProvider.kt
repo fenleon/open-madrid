@@ -43,31 +43,11 @@ data class ClearAdiLoginInfo(
 )
 
 /**
- * The provisioning outcome: `finish()`'s raw ProvisionedData plus the response's routing info.
- * The ProvisionedData→{client_secret, mid, metadata} mapping is TODO(live-capture) (one
- * OpenBubbles provisioning run under gdb) — the raw 0x78 bytes are carried as-is and the
- * mapping lives nowhere until then.
+ * The provisioning outcome: the machine tokens + the server's routing info, ready for
+ * [ClearAdiAnisette] and persistence. Live-pinned mapping (session 19f): client_secret =
+ * RNG draw 2, mid = RNG draw 3 (60 B), metadata = the PTM decrypt output's Vec (400 B live).
  */
-data class ClearAdiProvisionResult(
-    val provisionedData: ProvisionedData,
-    val rinfo: String,
-)
-
-/** State JSON of [ClearAdiProvisionResult] (hex ProvisionedData + rinfo; mapping TODO). */
-fun resultToJson(result: ClearAdiProvisionResult): String = buildJsonObject {
-    put("provisioned_data", result.provisionedData.raw.joinToString("") { "%02x".format(it) })
-    put("rinfo", result.rinfo)
-}.toString()
-
-fun resultFromJson(json: String): ClearAdiProvisionResult {
-    val o = Json.parseToJsonElement(json).jsonObject
-    val hexData = o["provisioned_data"]!!.jsonPrimitive.content
-    require(hexData.length >= 0x78 * 2) { "stored provisioned_data shorter than 0x78 bytes" }
-    val raw = ByteArray(hexData.length / 2) { i ->
-        ((Character.digit(hexData[i * 2], 16) shl 4) or Character.digit(hexData[i * 2 + 1], 16)).toByte()
-    }
-    return ClearAdiProvisionResult(ProvisionedData(raw), o["rinfo"]!!.jsonPrimitive.content)
-}
+typealias ClearAdiProvisionResult = ProvisionedAnisette
 
 /**
  * The header factory over a provisioned machine: the real OTP derivation
@@ -179,15 +159,12 @@ data class ProvisionedAnisette(
  *    `Content-Type: application/x-www-form-urlencoded` — "not a bug, it's how you *think
  *    different*", reference) → `Response.spim` (base64)
  * 3. [Spim.parse] the spim → `payload240` → [ClearAdiProvision.initSession] → session context
- * 4. [Cpim.build] with 124 RNG bytes (32/32/60), an empty extra blob and the GSA arg −2 →
- *    base64 into `request.cpim` → `POST <finish>` → `Response.{ptm, tk, X-Apple-I-MD-RINFO}`
+ * 4. [Cpim.build] with 124 RNG bytes (32/32/60) + the 16-B IV, an empty extra blob and the GSA
+ *    arg −2 → base64 into `request.cpim` → `POST <finish>` → `Response.{ptm, tk, X-Apple-I-MD-RINFO}`
  * 5. `tk` must be exactly 16 B (finish 17f1e31, error 0x8); key16 = `encrypt(session, NULL iv,
- *    tk)` (17f1eac); [ClearAdiProvision.decryptPtm] over the parsed Ptm payload → raw
- *    [ProvisionedData]
- *
- * The ProvisionedData→token-field mapping and the Cpim tail fields are the two remaining
- * TODO(live-capture) items; they are modeled honestly in [ClearAdiFraming] and surfaced here
- * as [cpimTailSeal] (required) and [finishSeed] (defaults to zero bytes).
+ *    tk)` (17f1eac); [ClearAdiProvision.decryptPtm] over the Ptm payload with the Ptm-embedded
+ *    seed (live-pinned: seed = ptm[4:20]) → [ProvisionedData.fromDecrypt] (the draw-1 gate echo
+ *    at out[408:440]) → [ProvisionedAnisette]
  */
 class ClearAnisetteProvider(
     private val http: IdsHttp,
@@ -195,8 +172,6 @@ class ClearAnisetteProvider(
     private val loginInfo: ClearAdiLoginInfo,
     private val rng: ClearAdiRng,
     private val cpimTailSeal: CpimTailSeal,
-    /** Seed passed to decryptPTM (finish 17f2557's rcx) — zero bytes pending the live capture. */
-    private val finishSeed: ByteArray = ByteArray(16),
     /** 16 random bytes identifying this client (reference `keychain_identifier`). */
     private val keychainIdentifier: ByteArray = rng.draw(16),
     private val clock: () -> Long = { System.currentTimeMillis() },
@@ -204,9 +179,9 @@ class ClearAnisetteProvider(
 
     /** Load the stored state, or provision it through the GSA round trips. */
     suspend fun ensureProvisioned(): ClearAdiProvisionResult {
-        stateStore.load()?.let { return resultFromJson(it) }
+        stateStore.load()?.let { return ProvisionedAnisette.fromJson(it) }
         val result = provision()
-        stateStore.save(resultToJson(result))
+        stateStore.save(result.toJson())
         return result
     }
 
@@ -221,11 +196,20 @@ class ClearAnisetteProvider(
         val sessionCtx = ClearAdiProvision.initSession(spim.payload)
 
         // omnisette passes extra = [] and the GSA arg −2 (reference provision()).
-        val cpim = Cpim.build(rng, extra = ByteArray(0), gsaArg = GSA_ARG, sessionCtx, spim.payload, cpimTailSeal)
+        val built = Cpim.build(
+            rng,
+            extra = ByteArray(0),
+            gsaArg = GSA_ARG,
+            nowSeconds = now() / 1000,
+            sessionCtx = sessionCtx,
+            payload240 = spim.payload,
+            spimTrailing = spim.trailing,
+            tail = cpimTailSeal,
+        )
         val finishBody = XmlPlist.encode(
             mapOf(
                 "header" to emptyMap<String, String>(),
-                "request" to mapOf("cpim" to Base64.getEncoder().encodeToString(cpim)),
+                "request" to mapOf("cpim" to Base64.getEncoder().encodeToString(built.wire)),
             ),
         )
         val finishResponse = exchange("finish-provisioning", urls.finishProvisioning, finishBody)
@@ -239,11 +223,18 @@ class ClearAnisetteProvider(
         }
         val parsed = Ptm.parse(ptm)
         val key16 = ClearAdiProvision.encrypt(sessionCtx, null, tk)
-        // count = payload.size / 16 (finish 17f2548); ProvisionedData is the first 0x78 B of
-        // the decrypted output (17f2dec–17f2e56)
-        val blocks = parsed.payload.size / 16
-        val data = ClearAdiProvision.decryptPtm(key16, parsed.payload.copyOfRange(0, blocks * 16), finishSeed)
-        return ClearAdiProvisionResult(ProvisionedData(data.copyOf(0x78)), rinfo)
+        // count = payload.size / 16 (finish 17f2548); the seed rides in the PTM itself
+        val out = ClearAdiProvision.decryptPtm(key16, parsed.payload, parsed.seed)
+        val provisioned = ProvisionedData.fromDecrypt(out, built.draw1, built.draw2, built.draw3)
+        return ProvisionedAnisette(
+            clientSecret = built.draw2,
+            mid = built.draw3,
+            metadata = provisioned.metadata,
+            rinfo = rinfo,
+            // the OTP flavor keeps the ClearAdiOtp convention (loginInfo decision); the PTM
+            // struct's own flavor byte (0x01 on a live Mac run) uses a different numbering
+            flavor = flavor,
+        )
     }
 
     /** The reference's fixed request-header set (`build_apple_request`, transcribed 1:1). */
