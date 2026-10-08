@@ -39,7 +39,7 @@ internal object NacValidation {
 
     /**
      * ValidationCtx::sign: the full 517-byte validation stamp. body576 is ValidationCtx
-     * [0x40:0x2c0] (the sign() body input); sig16 = SignState::sign(body576, rand16, blob480)
+     * [0x40:0x280] (the sign() body input; wire-verified ×3 live); sig16 = SignState::sign(body576, rand16, blob480)
      * with blob480 = the ValidationBody wire built here (NAC-NOTES.md; verified byte-exact,
      * STAGE7-10-REPORT.md session 6).
      */
@@ -72,12 +72,14 @@ internal object NacValidation {
      * ValidationCtx::key_establishment (0x1792fb0). EstablishResponse wire (698 B live,
      * offsets confirmed against the captures): tag u8 | key16 @1 | u32be bodyLen @0x11 |
      * body @0x15 (0x250 = 592 B live; decrypt_cbc consumes exactly bodyLen bytes) |
-     * trailing data Vec (copied verbatim by the binary, unused by the crypto). The iv and
+     * trailing data Vec (85 B live, copied verbatim into the ctx — NOT unused: its first
+     * 0x4f bytes are the mint's cert79, wire-verified across three live runs). The iv and
      * body are mapped through SKEY (0x2247f6), decrypted with the established round keys,
-     * and the plaintext is mapped through SDAT (0x2246f6). Returns the SDAT-mapped
-     * EstablishKeyResponse wire (592 B live; its payload must parse to 0x240 bytes).
+     * and the plaintext is mapped through SDAT (0x2246f6). The plaintext (592 B live) is
+     * the EstablishKeyResponse wire: [2:2+0x240] = the payload that becomes the ctx
+     * body576 region ([0x40:0x280], wire-verified ×3 live); [0:2] = its header.
      */
-    internal fun keyEstablishment(sessionInfo: ByteArray, pearKey16: ByteArray): ByteArray {
+    internal fun keyEstablishmentFull(sessionInfo: ByteArray, pearKey16: ByteArray): Established {
         require(pearKey16.size == 16) { "key_establishment: pear key must be 16 bytes" }
         require(sessionInfo.size >= 21) { "key_establishment: truncated EstablishResponse" }
         val key16 = sessionInfo.copyOfRange(1, 17)
@@ -90,8 +92,12 @@ internal object NacValidation {
         val pt = PearAes.decryptCbc(ct, iv, rk)
         val sdat = PearTables.sdat
         for (i in pt.indices) pt[i] = sdat[pt[i].toInt() and 0xff]
-        return pt
+        val trailing = sessionInfo.copyOfRange(21 + bodyLen, sessionInfo.size)
+        return Established(pt, trailing)
     }
+
+    internal fun keyEstablishment(sessionInfo: ByteArray, pearKey16: ByteArray): ByteArray =
+        keyEstablishmentFull(sessionInfo, pearKey16).payload
 
     private fun u32be(b: ByteArray, off: Int): Int =
         ((b[off].toInt() and 0xff) shl 24) or ((b[off + 1].toInt() and 0xff) shl 16) or

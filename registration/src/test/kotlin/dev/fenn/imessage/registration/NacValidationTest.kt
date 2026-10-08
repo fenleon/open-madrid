@@ -85,4 +85,22 @@ class NacValidationTest {
         assertContentEquals(expected, pt)
         assertEquals(592, pt.size)
     }
+
+    @Test
+    fun keyEstablishmentFullSplitsPayloadAndTrailing() {
+        // the full variant (2026-10-08 live-run mapping): payload = the SDAT-mapped
+        // EstablishKeyResponse wire; trailing = the response's verbatim tail (85 B live)
+        // whose first 0x4f bytes are the mint's cert79
+        val pearKey = hex("aebfc2884fd1e6ffdc60273be5756ff5")
+        val sessionInfo = hex("021b0e89cab86b89c2911da5bbf6f475e3000002502feb2054e4786cfb482f083fb085cb87e0906991e2003bb2a45b65ecf9764d2c39bafe46cdd93600af6d1af6f27999fb275eacc6b6663b075be0bee9fc04e4018899a0e028954cd0f74a51d3c353a1b711ec431974926847dc715d71918f43d424a0c8ea663034699e704306c3c25ab7fa76e3e99a8944a6c1916204bb923e41218232ccc2d4df2658f96bad8f1e4e8e41c20a159de8485e1ec398ea86d1ef9f036d3c92d103500f9be66718c503c18d6cf724909a7e29da398a6b360b56511c034a437483612b5ee1f1fcdb582e0e9a6de81e306542beac6e96c89faa1eb43324b7051598bac4c7e2542542a0bfd6704152a187fe61623b0fdd9ec67105b22190c4b06b68c66a1ddd972ef6e23b269e128a21d9f36c0f0ca1422f4ea90bb1b7e6c5f32d524bd38beaffe99af5ad573fe7a07f3f20094adb6aa281b95e3a20fd6b7489c8d231d94287165e425de90ce4bf0a21cf523146fb0e1dac3c942eb40f75db11b3edd853975f37851adcb8883eac8952d8ad8232d17910ffcd8524167d7c14034b19e3c4a28266d45569384c5d2591333b46a542981ef4ed16e57979170276e079efecf83ec517b12ffa8cf6968d0d7ffb4c15422a6ca034d93096311bfdb724ea37155a2b8923d2bd8eb270b378f528ffd694c0a822bfe1c3016853c6474bada51f519e440f68df4589b377e36f19f839b8fa4965836d75135a5fc7dde8e083652a692cf0e2236e23044e20703d46ac3535ad2e084289c94c4e46c2220fd53e72d5ecba1baab23063544b03c01fb37160e2f2b7878ca58e55944f879c8e5a3feb6ae035cd16a4ec555c28fd73f5aa154e8aa0ce47fb96a0bc18f382bf7101638d563bfe2bd7a7d7ebc4284087ad43556ee2b6ba3973ea044d300d79d2a96dafe22e5fd1b1cfbab9cc5ccc19cd653b689b3a409882eb3441654852a593e128262806")
+        val full = NacValidation.keyEstablishmentFull(sessionInfo, pearKey)
+        assertContentEquals(NacValidation.keyEstablishment(sessionInfo, pearKey), full.payload)
+        assertEquals(85, full.trailing.size)
+        assertContentEquals(
+            sessionInfo.copyOfRange(sessionInfo.size - 85, sessionInfo.size),
+            full.trailing,
+        )
+        // body576 = payload[2:578] (the ctx [0x40:0x280] region, wire-verified ×3 live)
+        assertEquals(592, full.payload.size)
+    }
 }
