@@ -4,8 +4,7 @@ package dev.fenn.imessage.registration
  * NAC validation stamp assembly (ValidationCtx::sign / ValidationCtx::key_establishment,
  * open_absinthe::nac, librust_lib_bluebubbles): the deku wire layouts of ValidationBody /
  * ValidationData and the EstablishResponse parse, transcribed from the byte-exact models
- * (nac_mint.py + NAC-NOTES.md). SignState::sign's output arrives as a parameter (sig16) —
- * that sub-step is modeled separately and deliberately not stubbed here.
+ * (nac_mint.py + NAC-NOTES.md). sig16 is computed internally via [NacSign] (SignState::sign).
  */
 internal object NacValidation {
 
@@ -38,8 +37,27 @@ internal object NacValidation {
         return stamp
     }
 
-    /** ValidationCtx::sign: the 517-byte validation stamp (sig16 supplied by the caller). */
+    /**
+     * ValidationCtx::sign: the full 517-byte validation stamp. body576 is ValidationCtx
+     * [0x40:0x2c0] (the sign() body input); sig16 = SignState::sign(body576, rand16, blob480)
+     * with blob480 = the ValidationBody wire built here (NAC-NOTES.md; verified byte-exact,
+     * STAGE7-10-REPORT.md session 6).
+     */
     internal fun mint(
+        cert79: ByteArray,
+        session250: ByteArray,
+        rngPad130: ByteArray,
+        rand16: ByteArray,
+        body576: ByteArray,
+    ): ByteArray {
+        val scrambled = NacMerge.scrambleBody(session250, rngPad130)
+        val blob = bodyToBits(scrambled, cert79)
+        val sig16 = NacSign.sign(body576, rand16, blob)
+        return dataToBits(rand16, sig16, blob)
+    }
+
+    /** Stamp assembly with the signature supplied (the blob-assembly step of the mint). */
+    internal fun mintWithSig(
         cert79: ByteArray,
         session250: ByteArray,
         rngPad130: ByteArray,
