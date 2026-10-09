@@ -6,8 +6,11 @@ package dev.fenn.imessage.registration
  * sig_hand.py / sig_init.py / sig_tail.py (NAC-NOTES.md; STAGE7-10-REPORT.md session 6:
  * e2e verified against the live stamp, 270/270 base + 225/225 mod tail rounds, `sig_hand.py
  * verify` 20/20). Tables come from [NacSignTables]; state-embedded constants (region 0x6f98,
- * 0x6fd8 selectors, 0x6fe8 mask/C68, P table) were runtime constants of the binary, verified
- * input- and body-independent.
+ * 0x6fd8 selectors, 0x6fe8 mask/C68, P table) proved INPUT-DEPENDENT (falsified on fresh live
+ * inputs, 2026-10-08; NAC-NOTES.md session 23) and are now computed: 0x17e8 u32 flag table
+ * (12-step barrett chain), 0x6f98 sel bytes ([region6f98]), 0x6fd8 selectors (base-7 digits),
+ * 0x6fe8 masks / 0x6fec flags ([nacMasksFlags]), the P region 0x6898 ([NacPTable]), the cipher
+ * round constants (state+0x25d8) and the map-key cursor (body[0x31]^body[0xc1]).
  *
  * Pipeline: static state build (stages 1–9: scatter, u32 flag table, perms, divisor, key map,
  * keygen, matrix copy + phases B–E, 16 position rounds) with the input mapped in (rand16 at
@@ -16,8 +19,7 @@ package dev.fenn.imessage.registration
  * staging from the generator soup, final formula, and the chain1 fold with tmp. sig16 = the 30th
  * final-formula output.
  *
- * The N constant (scatter size 2571 and the RS-init index modulo) is the model's pinned value —
- * byte-faithful to the verified Python.
+ * The N constant (scatter size and the RS-init index modulo) is body-derived ([scatter]).
  */
 internal object NacSign {
 
@@ -32,10 +34,9 @@ internal object NacSign {
         var tmp = ByteArray(16)
         for (run in 0 until 30) {
             val (rs, r0, r70ab) = rsInit(state, bs.bufs, chain1)
-            val region = NacSignTables.region6f98
             val ts = TailState(rs, r0, r70ab, intArrayOf(
-                region[4].toInt() and 0xff, region[5].toInt() and 0xff,
-                region[7].toInt() and 0xff, region[10].toInt() and 0xff))
+                state[0x6f98 + 4].toInt() and 0xff, state[0x6f98 + 5].toInt() and 0xff,
+                state[0x6f98 + 7].toInt() and 0xff, state[0x6f98 + 10].toInt() and 0xff))
             runstartFeedback(ts, rs[16], rs[12])
             // [rsp+0x80] is re-seeded per run with chain1[10] — no cross-run chaining
             val s = soup(state, chain1, chain1[10], chain1[7], chain1[4])
@@ -71,24 +72,31 @@ internal object NacSign {
 
     /** Static state (0x7888 B) + derived pieces for one sign() call (sig_init.build_state). */
     private fun buildState(body: ByteArray, rand16: ByteArray, blob480: ByteArray): BuiltState {
-        val t = NacSignTables
         val state = ByteArray(0x7888)
-        val u32t = u32tab()
+        val u32t = u32tab(body)
         val (perm1, perm2) = perms(u32t)
         for (i in 0..255) putU32le(state, 0x21d8 + 4 * i, perm2[i])
         for (i in 0..255) putU32le(state, 0x1dd8 + 4 * i, perm1[i])
-        putU64le(state, 0x17e0, N.toLong())
-        val kbmap = mapKey(divisor(body))
+        val n = scatter(body).first
+        putU64le(state, 0x17e0, n.toLong())
+        val kbmap = mapKey(divisor(body), (body[0x31].toInt() xor body[0xc1].toInt()) and 0xff)
         kbmap.copyInto(state, 0x1be8)
         val kg = keygen(body, kbmap)
         kg.copyInto(state, 0x2678)
-        phaseBCDE(body, kbmap, u32t, state)
-        val (n, _, vecA, vecB) = vecABMut(body, u32t)
+        val (masks, flags) = nacMasksFlags(body)
+        phaseBCDE(body, kbmap, u32t, flags, state)
+        val (_, _, vecA, vecB) = vecABMut(body, u32t, masks)
         rounds(state)
-        t.region6f98.copyInto(state, 0x6f98)
-        t.sel6fd8.copyInto(state, 0x6fd8)
-        t.maskC68.copyInto(state, 0x6fe8)
-        t.pTable.copyInto(state, 0x6898)
+        region6f98(state).copyInto(state, 0x6f98)
+        // state+0x6fd8: base-7 digits of body[0xe0+i]^body[0xf0+i] (0x179e487-0x179e6e3)
+        for (i in 0..7) {
+            val x = (body[0xe0 + i].toInt() xor body[0xf0 + i].toInt()) and 0xff
+            state[0x6fd8 + 2 * i] = (x % 7).toByte()
+            state[0x6fd8 + 2 * i + 1] = (x / 7 % 7).toByte()
+        }
+        putU32le(state, 0x6fe8, masks)
+        putU32le(state, 0x6fec, flags)
+        NacPTable.build(state).copyInto(state, 0x6898)
         rand16.copyInto(state, 0x15f0)
         blob480.copyInto(state, 0x1600)
         val bufs = genBufs(state.copyOfRange(0x2678, 0x2678 + 544), vecA)
@@ -109,22 +117,61 @@ internal object NacSign {
 
     // ------------------------- stage 3: flags u32 table (state+0x17e8) ------
 
-    private val C0 = 0xb4b41272.toInt()
-    private val CFL = intArrayOf(
-        0x89e23c5f.toInt(), 0xc74c4a03.toInt(), 0xb8f43515.toInt(), 0x07297e18,
-        0xf2cc1c57.toInt(), 0x292bcf40, 0xe863df66.toInt(), 0x8aa0b814.toInt(),
-    )
+    // barrett reduction for D = 0xffffffff00000005: q = (x * 0x800000028000000d) >> 95
+    // over the FULL 128-bit product (a 64-bit wrapping multiply would drop the bits
+    // above 2^64 that >>95 consumes — BigInteger keeps this exact and cheap).
+    private val BM = java.math.BigInteger("800000028000000d", 16)
+    private val D_BI = java.math.BigInteger("ffffffff00000005", 16)
+    private val MASK64 = java.math.BigInteger("ffffffffffffffff", 16)
 
-    private fun u32tab(): IntArray {
+    /** barrett reduction; see sig_hand.barrett. */
+    private fun barrett(x: Long): Long {
+        val xu = java.math.BigInteger.valueOf(x).and(MASK64)
+        val q = xu.multiply(BM).shiftRight(95)
+        return xu.add(q.multiply(D_BI)).and(MASK64).longValueExact()
+    }
+
+    /** the 12-step square chain seeded by 4 body-byte XORs (0x179de61..). */
+    private fun chainSeq(body: ByteArray): LongArray {
+        val s = (((body[0xea].toInt() xor body[0xfa].toInt()) and 0xff).toLong() shl 24 or
+            (((body[0xe4].toInt() xor body[0xf4].toInt()) and 0xff).toLong() shl 16) or
+            (((body[0xed].toInt() xor body[0xfd].toInt()) and 0xff).toLong() shl 8) or
+            ((body[0xe6].toInt() xor body[0xf6].toInt()) and 0xff).toLong())
+        val xs = LongArray(13)
+        xs[0] = s
+        for (i in 1..12) {
+            xs[i] = barrett(xs[i - 1] * xs[i - 1] + 1)
+        }
+        return xs
+    }
+
+    /** stage 3: flags u32 table (state+0x17e8) — INPUT-DEPENDENT (0x179de61-0x179e26a). */
+    private fun u32tab(body: ByteArray): IntArray {
+        val xs = chainSeq(body)
+        val masks = (((1L shl (xs[3].toInt() and 7)) shl 24) or
+            ((1L shl (xs[2].toInt() and 7)) shl 16) or
+            ((1L shl (xs[1].toInt() and 7)) shl 8) or
+            (1L shl ((body[0xe6].toInt() xor body[0xf6].toInt()) and 7)))
+        val base = masks xor (xs[12] and 0xffffffffL)
         val t = IntArray(256)
         for (b in 0..255) {
-            var v = C0
+            var v = base
             for (i in 0..7) {
-                if (b and (1 shl i) != 0) v = v xor CFL[i]
+                if (b and (1 shl i) != 0) v = v xor (xs[4 + i] and 0xffffffffL)
             }
-            t[b] = v
+            t[b] = v.toInt()
         }
         return t
+    }
+
+    /** state+0x6fe8 masks / +0x6fec flags — INPUT-DEPENDENT (same chain as [u32tab]). */
+    private fun nacMasksFlags(body: ByteArray): Pair<Int, Int> {
+        val xs = chainSeq(body)
+        val masks = (((1L shl (xs[3].toInt() and 7)) shl 24) or
+            ((1L shl (xs[2].toInt() and 7)) shl 16) or
+            ((1L shl (xs[1].toInt() and 7)) shl 8) or
+            (1L shl ((body[0xe6].toInt() xor body[0xf6].toInt()) and 7)))
+        return masks.toInt() to (xs[12] and 0xffffffffL).toInt()
     }
 
     // ------------- stages 4/5: divisor+map (state+0x1be8) -------------------
@@ -161,7 +208,7 @@ internal object NacSign {
         else -> error("bad key byte ${kb.toString(16)}")
     }
 
-    private fun mapKey(div: ByteArray): ByteArray {
+    private fun mapKey(div: ByteArray, cursor0: Int): ByteArray {
         val km = div.copyOf()
         for (c in 0..10) {
             var acc = 0
@@ -174,7 +221,7 @@ internal object NacSign {
             }
             var k = 0
             while (acc > 32) {                       // exit when acc <= 0x20
-                val row = (12 + 5 * k) and 0xf
+                val row = (cursor0 + 5 * k) and 0xf
                 when (km[11 * row + c].toInt() and 0xff) {
                     0x01 -> { acc -= 4; km[11 * row + c] = 0x24 }
                     0x18 -> { acc -= 2; km[11 * row + c] = 0x24 }
@@ -241,9 +288,13 @@ internal object NacSign {
 
     // ----------- stage 8: matrix copy + phases B..E -------------------------
 
-    private val FLAGS = 0xa4b51a62.toInt()          // state+0x6fec constant
-
-    private fun phaseBCDE(body: ByteArray, kbmap: ByteArray, u32t: IntArray, state: ByteArray) {
+    private fun phaseBCDE(
+        body: ByteArray,
+        kbmap: ByteArray,
+        u32t: IntArray,
+        flags: Int,
+        state: ByteArray,
+    ) {
         val t = NacSignTables
         for (j in 0..13) {
             val src = (t.mtxSrc[j] * 16).toInt()
@@ -260,7 +311,7 @@ internal object NacSign {
                     x = x xor ((body[0x1a0 + pos + k].toInt() and 0xff) xor
                         (t.phbT[0x20 * j + ((pos + k) and 0xf)].toInt() and 0xff))
                 }
-                putU32le(state, 0x1d98 + 4 * t.phbIdx[j].toInt(), FLAGS xor u32t[x])
+                putU32le(state, 0x1d98 + 4 * t.phbIdx[j].toInt(), flags xor u32t[x])
             }
             pos += s
         }
@@ -327,16 +378,19 @@ internal object NacSign {
 
     // ----------- stage 9: vecA/vecB + 16 position rounds --------------------
 
-    private val C68 = 0xa4b51a62.toInt()            // scatter-mutation index const
-    private val MUT_MASK = 0xeffef7ef.toInt()
-
-    private fun scatterMutated(body: ByteArray, u32t: IntArray): Pair<Int, ByteArray> {
+    private fun scatterMutated(
+        body: ByteArray,
+        u32t: IntArray,
+        masks: Int,
+    ): Pair<Int, ByteArray> {
         val (n, scat) = scatter(body)
         val buf = scat.copyOf()
         var d = 0xb0
         for (i in 0..255) {
-            val idx = (((u32t[i] xor C0) xor C68).toLong() and MUT_MASK.toLong() and 0xffffffffL)
-                .rem(n.toLong()).toInt()
+            // idx = (u32t[i] ^ masks) & ~masks — the frozen (u32t^C0^C68)&MUT_MASK pair was
+            // the s20 snapshot of this formula (sig_hand.scatter_mutated, session 23)
+            val idx = ((u32t[i].toLong() xor masks.toLong()) and masks.inv().toLong() and
+                0xffffffffL).rem(n.toLong()).toInt()
             buf[idx] = (d xor 0xb0).toByte()
             val r10 = (2 * (i + 1)) and 0xff
             d = (((0xa0 - (r10 and 0x60)) or 0x11) + i) and 0xff
@@ -344,9 +398,13 @@ internal object NacSign {
         return n to buf
     }
 
-    private fun vecABMut(body: ByteArray, u32t: IntArray): Quad<Int, ByteArray, ByteArray, ByteArray> {
+    private fun vecABMut(
+        body: ByteArray,
+        u32t: IntArray,
+        masks: Int,
+    ): Quad<Int, ByteArray, ByteArray, ByteArray> {
         val t = NacSignTables
-        val (n, scat) = scatterMutated(body, u32t)
+        val (n, scat) = scatterMutated(body, u32t, masks)
         val vecA = ByteArray(n)
         val vecB = ByteArray(n)
         for (i in 0 until n) {
@@ -389,6 +447,23 @@ internal object NacSign {
         }
     }
 
+    /** state+0x6f98 sel bytes (producer 0x17a2100-0x17a2387) — INPUT-DEPENDENT. */
+    private fun region6f98(state: ByteArray): ByteArray {
+        val sel = NacSignTables.tsel6f98
+        val out = ByteArray(16)
+        for (j in 0..3) {
+            val mv = u32At(state, 0x2628 + 4 * j).toLong() and 0xffffffffL
+            out[4 * j + 0] = sel[(mv % 0xe9).toInt()]
+            out[4 * j + 1] = sel[0xf0 + (mv % 0xef).toInt()]
+            out[4 * j + 2] = sel[0x1e0 + (mv % 0xf1).toInt()]
+            out[4 * j + 3] = sel[0x2e0 + (mv % 0xfb).toInt()]
+        }
+        for (i in 0..15) {
+            out[i] = (out[i].toInt() xor state[0x2668 + i].toInt()).toByte()
+        }
+        return out
+    }
+
     // ----------- 16 generator buffers (sig_init.gen_bufs) -------------------
 
     private fun genBufs(kg: ByteArray, vecA: ByteArray): Array<ByteArray> {
@@ -420,15 +495,14 @@ internal object NacSign {
 
     // ----------- per-run init: RS32, rec0, r70ab (sig_init.rs_init) ---------
 
-    private const val N = 2571
-    private val MASK_IDX = 0xeffef7ef.toInt()
-
     /** RS byte template: perm1[c] ^ PDE[k] -> masked index -> BUF lookup. */
     private fun rsIdxVal(c: Int, k: Int, state: ByteArray, buf: ByteArray): Int {
         val w = u32At(state, 0x1dd8 + 4 * c) xor u32At(state, 0x1d98 + 4 * k)
-        // w & MASK_IDX is an unsigned u32 in the model — keep it unsigned here too
-        var idx = (w.toLong() and MASK_IDX.toLong() and 0xffffffffL)
-        if (idx >= N) idx %= N
+        // MASK_IDX was ~masks_s20 (frozen); the general form is w & ~masks (session 23)
+        val masks = u32At(state, 0x6fe8)
+        var idx = (w.toLong() and masks.inv().toLong() and 0xffffffffL)
+        val n = buf.size
+        if (idx >= n) idx %= n
         val i = idx.toInt()
         return ((((i and 0xff) xor 0xf3) + 0x45) and 0xff) xor
             (buf[i].toInt() and 0xff) xor 0x89
@@ -486,23 +560,22 @@ internal object NacSign {
         r10b: Int,
         r11b: Int,
     ): Pair<Int, Int> {
-        val g = NacSignTables.region6f98
         val c = chain1
-        val dl = ((c[8] xor 5) + (g[9].toInt().inv() and 0xff) + (g[8].toInt() and 0xff)) and 0xff
+        val dl = ((c[8] xor 5) + ((state[0x6f98 + 9].toInt().inv() and 0xff)) + ((state[0x6f98 + 8].toInt() and 0xff))) and 0xff
         var cl = ((dl * 2 + 2).inv() and 0xcc) + dl + 0x9b and 0xff
         cl = (cl xor c[9]) xor 0x99
         var r8b = sp80In
-        r8b = (r8b - (g[13].toInt() and 0xff)) and 0xff
+        r8b = (r8b - ((state[0x6f98 + 13].toInt() and 0xff))) and 0xff
         r8b = (r8b + cl) and 0xff
-        r8b = r8b xor (g[15].toInt() and 0xff)
+        r8b = r8b xor ((state[0x6f98 + 15].toInt() and 0xff))
         r8b = (r8b + (c[11] xor 0x7f)) and 0xff
         r8b = (r8b + 0x81) and 0xff
-        var r11 = ((r11b xor 0xf4) - (g[6].toInt() and 0xff) + (g[1].toInt() and 0xff)) and 0xff
+        var r11 = ((r11b xor 0xf4) - ((state[0x6f98 + 6].toInt() and 0xff)) + ((state[0x6f98 + 1].toInt() and 0xff))) and 0xff
         r11 = (r11 xor c[5]) and 0xff
         var r9 = (c[6] + 0x80) and 0xff
-        r9 = (r9 - (g[3].toInt() and 0xff)) and 0xff
+        r9 = (r9 - ((state[0x6f98 + 3].toInt() and 0xff))) and 0xff
         r9 = (r9 + r11) and 0xff
-        r9 = r9 xor (g[14].toInt() and 0xff)
+        r9 = r9 xor ((state[0x6f98 + 14].toInt() and 0xff))
         r9 = (r9 + 0x80) and 0xff
         r9 = (r9 - r10b) and 0xff
         return r9 to r8b
@@ -555,19 +628,6 @@ internal object NacSign {
         )
     }
 
-    // round constants (rc-xor at 0x17a347b): (ecx, ebx, eax, edx) per r12.
-    private val RC = arrayOf(
-        intArrayOf(0x6db4d78c, 0x39c17123, 0x10000800, 0x7d2b7a3d),
-        intArrayOf(0x91c9e17b.toInt(), 0x43c27516, 0x8833bd3f.toInt(), 0x2be7e3f8),
-        intArrayOf(0xc5c95c16.toInt(), 0x3600f2eb, 0x4b150d7f, 0x1e1561a0),
-        intArrayOf(0x9d272c48.toInt(), 0xff511567.toInt(), 0xf52b2b67.toInt(), 0xc974d62c.toInt()),
-        intArrayOf(0xc21d8753.toInt(), 0x533fd05b, 0x253d787c, 0xc1481826.toInt()),
-        intArrayOf(0xd7915485.toInt(), 0xf959e065.toInt(), 0x3e03b158, 0x07d5db45),
-        intArrayOf(0xfd338a1f.toInt(), 0x8a4a0677.toInt(), 0xf2cc1c47.toInt(), 0x0a536e6c),
-        intArrayOf(0x935aec40.toInt(), 0x596dbe37, 0x647bccd7, 0x6c2bb938),
-        intArrayOf(0x6cede063, 0x23361c77, 0xa0cee083.toInt(), 0x4b8b7e10),
-    )
-
     /** r14b after mixing: constant per r12; record-window byte offset in the export D formula. */
     private val XR14 = intArrayOf(0, 1, 1, 2, 2, 2, 5, 3, 3)
 
@@ -615,10 +675,12 @@ internal object NacSign {
         val r10 = utab(5, m["bl"]!!) xor utab(4, m["b6"]!!)
         var ebx = utab(7, m["sp48"]!!) xor utab(6, m["cl3"]!!)
         var edx = utab(7, m["r13mid"]!!) xor utab(6, m["dil1x"]!!)
-        ecx = ecx xor ebp xor RC[r12][0]
-        ebx = ebx xor edi xor RC[r12][1]
-        eax = eax xor RC[r12][2]
-        edx = edx xor r10 xor RC[r12][3]
+        // the 'RC' table was the s20 snapshot of state+0x25d8+16*(8-r12) — input-dependent
+        val rcBase = 0x25d8 + 16 * (8 - r12)
+        ecx = ecx xor ebp xor u32At(state, rcBase)
+        ebx = ebx xor edi xor u32At(state, rcBase + 4)
+        eax = eax xor u32At(state, rcBase + 8)
+        edx = edx xor r10 xor u32At(state, rcBase + 12)
         // export
         val x14 = XR14[r12]
         val d = ts.r70ab xor ts.rec[17 * x14 + 16] xor ts.rec[17 * x14 + 8] xor
@@ -669,9 +731,6 @@ internal object NacSign {
 
     // ----------- staging from the generator soup (sig_hand) -----------------
 
-    private const val MASK6FE8 = 0x10010810
-    private const val SP28 = 0x40
-
     private fun stagingFromSoup(
         state: ByteArray,
         vecB: ByteArray,
@@ -680,6 +739,7 @@ internal object NacSign {
     ): ByteArray {
         val t = NacSignTables
         val t2 = t.t2Big
+        val masks = u32At(state, 0x6fe8)  // was MASK6FE8 (s20-frozen)
         val stg = ByteArray(16)
         for (i in 0..15) {
             val idxP = (t.t2Sel[i] shr 2).toInt()      // phaseD/E u32 index (<= 0xff)
@@ -701,9 +761,9 @@ internal object NacSign {
                 else -> { edi = u32At(state, 0x5898 + 4 * rdx); ebp = p2u }
             }
             val ecx = r10 xor 0x4b2270b0
-            val b0 = MASK6FE8 and edi
-            val r12v = ecx and MASK6FE8
-            val r8v = MASK6FE8 and ebp
+            val b0 = masks and edi
+            val r12v = ecx and masks
+            val r8v = masks and ebp
             val out: Int
             if (i == 10) {
                 // al source captured live = st[0x7009] ^ idx (head xor at 0x17a374a)
@@ -713,11 +773,12 @@ internal object NacSign {
                 val r10x = u32At(state, 0x5098 + 4 * ebx)
                 val eax = u32At(state, 0x21d8 + 4 * al) xor r10x xor
                     u32At(state, 0x21d8 + 4 * (sp20 and 0xff)) xor r9 xor 0x6dafefff
-                val ecx2 = u32At(state, 0x21d8 + 4 * SP28)
+                // rsp+0x28 = st[0x6fa2] (loaded at 0x17a36c0) — was frozen 0x40
+                val ecx2 = u32At(state, 0x21d8 + 4 * (state[0x6fa2].toInt() and 0xff))
                 val edi2 = edi xor ebp xor r10 xor b0 xor r8v xor r12v xor ecx2 xor eax
-                out = edi2 xor (((eax xor ecx2) xor 0x4b2270b0) and MASK6FE8)
+                out = edi2 xor (((eax xor ecx2) xor 0x4b2270b0) and masks)
             } else {
-                val r15n = MASK6FE8 and (r9 xor 0x268d9f4f)
+                val r15n = masks and (r9 xor 0x268d9f4f)
                 val edi2 = edi xor r15n
                 val ebp2 = ebp xor r9 xor ecx xor edi2
                 out = (b0 xor r12v xor ebp2 xor r8v) xor 0x268d9f4f
