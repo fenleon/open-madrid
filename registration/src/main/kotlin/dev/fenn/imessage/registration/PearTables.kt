@@ -57,8 +57,7 @@ internal object PearTables {
     val tc: IntArray by lazy { wordsAt(8464, 256) }
     /** .rodata 0x2465b8 — encrypt T-table D. */
     val td: IntArray by lazy { wordsAt(9488, 256) }
-    /** .rodata 0x2469b8 — establish_key schedule sbox. */
-    val s3: ByteArray by lazy { bytesAt(10512, 256) }
+    /** .rodata 0x2469b8 — establish_key schedule sbox. */    val s3: ByteArray by lazy { bytesAt(10512, 256) }
     /** .rodata 0x246ab8 — establish_key schedule rcon (only bytes 1..10 consumed; the tail overlaps the est-transform tables). */
     val r3: ByteArray by lazy { bytesAt(10768, 256) }
     /** .rodata 0x246ac4 — establish_key transform T-table 0. */
@@ -73,4 +72,8 @@ internal object PearTables {
     val s2: ByteArray by lazy { bytesAt(15120, 256) }
     /** .rodata 0x247bc4 — init_key schedule rcon (only bytes 1..10 consumed). */
     val r2: ByteArray by lazy { bytesAt(15376, 256) }
+    /** .rodata 0x2249f9 — the §1.1 request blob's pear-AES-output byte map (table[byte]). */
+    val blobFieldMap: ByteArray by lazy { bytesAt(15632, 256) }
+    /** .rodata 0x224af9 — the §1.1 request blob's plaintext byte map (table[byte]). */
+    val blobPayloadMap: ByteArray by lazy { bytesAt(15888, 256) }
 }
