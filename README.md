@@ -47,6 +47,10 @@ No Apple-derived code or binary ships here, including the IMDAppleServices frame
 
 One documented exception: the ClearADI and pear lookup tables (constant data the ADI ciphers need) were reconstructed by analyzing a compiled ADI implementation and ship as generated Kotlin source, decoded at startup. No Apple code, binary, or resource file is committed. The extraction method is in the spec.
 
+## Using it
+
+Tagged releases build on [JitPack](https://jitpack.io/#fenleon/open-madrid) — module coordinates and code snippets for the mint, anisette, and the engine are in [docs/USAGE.md](docs/USAGE.md).
+
 ## Building
 
 ```bash

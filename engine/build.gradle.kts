@@ -64,3 +64,16 @@ tasks.register<JavaExec>("runProbe") {
     workingDir = rootDir
     args = (findProperty("probeArgs") as String?)?.split(" ")?.filter { it.isNotBlank() } ?: emptyList()
 }
+
+// JitPack publishing — :engine is an Android library; the release component
+// only exists in this module's own evaluation scope.
+apply(plugin = "maven-publish")
+afterEvaluate {
+    extensions.configure<PublishingExtension> {
+        publications {
+            create<MavenPublication>("maven") {
+                from(components["release"])
+            }
+        }
+    }
+}
