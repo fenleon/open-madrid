@@ -87,7 +87,8 @@ object AppleTrust {
         AppleTrust::class.java.getResourceAsStream(path)?.use { it.readBytes() }
             ?: throw IllegalStateException("embedded root $path missing from resources")
 
-    private fun embeddedRootDers(): Array<ByteArray> = ROOT_RESOURCES.map { embeddedRoot(it) }.toTypedArray()
+    /** The default pool's DER anchors — exposed for rustls-backed transports (rev 38). */
+    fun embeddedRootDers(): Array<ByteArray> = ROOT_RESOURCES.map { embeddedRoot(it) }.toTypedArray()
 
     /** A trust manager whose only anchors are [certificatesDer] (DER X.509, any count). */
     fun trustManager(vararg certificatesDer: ByteArray): X509TrustManager {
