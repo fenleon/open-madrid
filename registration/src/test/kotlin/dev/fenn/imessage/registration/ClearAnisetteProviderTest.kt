@@ -348,7 +348,7 @@ class ClearAnisetteProviderTest {
             } else {
                 // the cpim must be the base64 request body field
                 @Suppress("UNCHECKED_CAST")
-                val request = (bodyPlist as Map<String, Any?>)["request"] as Map<String, String>
+                val request = (bodyPlist as Map<String, Any?>)["Request"] as Map<String, String>
                 assertTrue(request.containsKey("cpim"))
                 val cpim = Base64.getDecoder().decode(request["cpim"]!!)
                 // outer shape: [u32 BE 5][iv 16][u32 BE 160][encout 160][tail 88]
@@ -375,8 +375,8 @@ class ClearAnisetteProviderTest {
         private fun assertBodyHasEmptyDicts(body: Any?) {
             @Suppress("UNCHECKED_CAST")
             val m = body as Map<String, Any?>
-            assertEquals(0, (m["header"] as Map<*, *>).size)
-            assertEquals(0, (m["request"] as Map<*, *>).size)
+            assertEquals(0, (m["Header"] as Map<*, *>).size)
+            assertEquals(0, (m["Request"] as Map<*, *>).size)
         }
     }
 

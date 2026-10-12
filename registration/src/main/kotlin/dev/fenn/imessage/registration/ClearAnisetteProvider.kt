@@ -155,9 +155,10 @@ data class ProvisionedAnisette(
  *
  * 1. `GET https://gsa.apple.com/grandslam/GsService2/lookup` → XML plist →
  *    `urls.{midStartProvisioning, midFinishProvisioning}`
- * 2. `POST <start>` with body `{"header":{}, "request":{}}` (XML plist,
- *    `Content-Type: application/x-www-form-urlencoded` — "not a bug, it's how you *think
- *    different*", reference) → `Response.spim` (base64)
+ * 2. `POST <start>` with body `{"Header":{}, "Request":{}}` (XML plist — the keys are
+ *    CASED: lowercase `header`/`request` gets a silent HTTP 200 with an EMPTY body,
+ *    live-probed 2026-10-12; `Content-Type: application/x-www-form-urlencoded` —
+ *    "not a bug, it's how you *think different*", reference) → `Response.spim` (base64)
  * 3. [Spim.parse] the spim → `payload240` → [ClearAdiProvision.initSession] → session context
  * 4. [Cpim.build] with 124 RNG bytes (32/32/60) + the 16-B IV, an empty extra blob and the GSA
  *    arg −2 → base64 into `request.cpim` → `POST <finish>` → `Response.{ptm, tk, X-Apple-I-MD-RINFO}`
@@ -189,7 +190,7 @@ class ClearAnisetteProvider(
     suspend fun provision(): ClearAdiProvisionResult {
         val urls = lookupUrls()
 
-        val startBody = XmlPlist.encode(mapOf("header" to emptyMap<String, String>(), "request" to emptyMap<String, String>()))
+        val startBody = XmlPlist.encode(mapOf("Header" to emptyMap<String, String>(), "Request" to emptyMap<String, String>()))
         val startResponse = exchange("start-provisioning", urls.startProvisioning, startBody)
         val spimB64 = responseString(startResponse, "Response", "spim")
         val spim = Spim.parse(Base64.getDecoder().decode(spimB64.trim()))
@@ -208,8 +209,8 @@ class ClearAnisetteProvider(
         )
         val finishBody = XmlPlist.encode(
             mapOf(
-                "header" to emptyMap<String, String>(),
-                "request" to mapOf("cpim" to Base64.getEncoder().encodeToString(built.wire)),
+                "Header" to emptyMap<String, String>(),
+                "Request" to mapOf("cpim" to Base64.getEncoder().encodeToString(built.wire)),
             ),
         )
         val finishResponse = exchange("finish-provisioning", urls.finishProvisioning, finishBody)
