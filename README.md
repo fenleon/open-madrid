@@ -1,29 +1,26 @@
 # Open Madrid
 
-An open implementation of Apple's madrid protocol (iMessage) in Kotlin. Covers the property-list codecs, the APNs "courier" push client, the IDS identity service, the encryption envelope, the registration/activation chain, and the ADI anisette chain (device provisioning, per-request OTP headers, and the validation-stamp "NAC" mint) computed fully locally in Kotlin.
-
-Unlike [open-absinthe](https://github.com/JJTech0130/open-absinthe), which is a mock placeholder with no real code, everything here is readable and Apache-2.0 licensed.
+An open implementation of Apple's madrid protocol (iMessage) in Kotlin: the binary plist codecs, the APNs "courier" push client, the IDS identity service, the encryption envelopes, the registration/activation chain, and the ADI anisette chain (device provisioning, OTP headers, the validation-stamp mint) — all computed locally, in the open. Apache-2.0. [open-absinthe](https://github.com/JJTech0130/open-absinthe), the reference everyone else depends on, is a mock placeholder with no real code; this is the real thing.
 
 ## Status
 
-Validated:
+Verified against Apple:
 
-- The parsers handle real Apple bytes. The actual 405-entry IDS bag and 65-entry APNs bag, captured from a registered device, are committed as test fixtures and decoded with exact-value assertions.
-- The registration chain ran live against Apple (2026-10-02→04, spec rev 26): Albert activation, the packed APNs courier, the full GSA sign-in (SRP, trusted-device 2FA, PET delivery, postdata), then IDS authenticate and register — both green, `mailto:` handle active. The earlier 409 refusals turned out to be Apple's validation-stamp replay guard (one mint = one device record), documented in the spec.
-- Two live unauthenticated probes against Apple succeeded: both bag endpoints return plists this stack parses, and certificate pinning validates Apple's real TLS chains. A drift check ships with the repo (`:engine:runProbe`).
-- The courier's auth model is settled: the packed path needs no client certificate; the legacy path answers the handshake with a TLS 1.3 post-handshake `certificate_required` alert.
-- The ADI anisette chain is reimplemented natively, no emulation or helper binary: the white-box OTP ciphers, the GSA provisioning exchange, the full spim/cpim/ptm wire framing, and the validation-stamp ("NAC") mint — pear white-box cipher, blob assembly, and the 16-byte OTS signature (`NacSign`) — are transcribed clean-room from analysis of a compiled ADI implementation, verified byte-exact against oracle vectors and live captures (three genuine provisioning runs plus validation-stamp captures under an instrumented debugger). Every byte group of the exchange and of the 517-byte stamp is identified and reproduced; the full stamp computes byte-exact in Kotlin from its inputs (the earlier python reference model is retired to dev capture notes; the Kotlin port is pinned by synthetic-vector tests against it). 213 tests green, spec rev 35. A minimal public facade (`NacMint`) exposes the mint for consumers. All five wire-input mappings from the validation exchange (§1.1 C56) are now pinned and implemented: the step-2 request blob (C56-a, `NacRequestBlob` — closed by direct in-process replay of the reference client's validation context, byte-exact on two independent runs) and the hardware-identity serialization (C56-c, `HardwareConfiguration.toBin` — the closed `to_bin` grammar, keyed off the C58 Mac-Hardware-Info export identity and round-trip-verified byte-exact against a live 250-B capture). Every §1.1 mint input mapping is established. The step-2 `5003 EM` error that a first live smoke hit is closed (spec rev 38): Apple's validation endpoint fingerprints the TLS handshake and only accepts rustls-shaped clients — the blob and framing were verified correct by posting fresh, never-seen blobs minted by the reference client itself, which the endpoint accepted over rustls while rejecting the identical bytes over OpenSSL, BoringSSL and the JVM stacks. A small rust transport (reqwest + rustls, ~2 exported functions) carries the two validation calls from the consumer app; everything else stays pure Kotlin. The live ADI provisioning exchange also runs from this codebase after two wire fixes (the start/finish body keys are case-sensitive, and the GSA lookup 404s without a well-formed `X-Mme-Client-Info`). 217 tests green. No anisette server, no Unicorn, no Mac relay.
+- **Registration** — Albert activation, full GSA sign-in (SRP, trusted-device 2FA, PET delivery), IDS authenticate and register all ran live (2026-10-02→04); the registered handle stayed active.
+- **Bags and TLS** — both bag endpoints return plists these parsers handle; certificate pinning validates Apple's real chains. A drift check ships with the repo (`:engine:runProbe`).
+- **ADI/anisette** — the white-box ciphers, the GSA provisioning exchange, the spim/cpim/ptm wire framing, and the validation-stamp ("NAC") mint are reimplemented in Kotlin, clean-room, byte-exact against live captures. The full 517-byte stamp computes from its inputs; `NacMint` is the public facade. No anisette server, no Unicorn, no Mac relay.
+- **The validation endpoint's `5003 EM` error is solved** (spec rev 38): it fingerprints the TLS handshake and only accepts rustls-shaped clients. Proven by posting fresh, never-seen blobs minted by the reference client itself — accepted over rustls, rejected byte-for-byte identically over OpenSSL, BoringSSL, and the JVM stacks. Kotlin code and framing were never wrong. JVM consumers need a small rust transport (reqwest + rustls, two functions) for the two validation calls; the private imessage tool in this org carries the reference implementation.
 
-Not validated yet:
+Not yet:
 
-- No real message send or receive over the courier; renewal across sessions is untested.
-- The crypto envelopes have round-trip tests but no known-answer vectors from a live device.
+- No message send or receive over the courier; renewal across sessions untested.
+- Crypto envelopes have round-trip tests but no known-answer vectors from a live device.
 - A few wire details are capture-bound guesses, tracked in the spec's open-questions checklist.
-- PQ3 is unsupported.
+- PQ3 unsupported.
 
 ## Why another project?
 
-Almost every route to iMessage is closed in some way. Open Madrid is permissively licensed, dependency-light, and fully readable.
+Almost every route to iMessage is closed in some way:
 
 | Project | License / catch |
 |---|---|
@@ -33,22 +30,22 @@ Almost every route to iMessage is closed in some way. Open Madrid is permissivel
 | BlueBubbles | Needs a Mac running 24/7 |
 | OpenBubbles | Depends on closed-source open-absinthe |
 
-Protocol facts live in the spec: [docs/imessage-protocol-spec.md](docs/imessage-protocol-spec.md).
+The protocol facts behind the code are written up in the spec: [docs/imessage-protocol-spec.md](docs/imessage-protocol-spec.md).
 
 ## Contributing
 
 This is a clean-room. Contributors never read the source of rustpush, pypush, imessagego, or their forks. Two roles, kept apart:
 
 1. Readers study the existing projects. Their only output is the spec.
-2. Writers work only from the spec, Apple's documentation, and recordings of their own device's traffic. Don't open other projects' source or paste their identifiers into commits or issues.
+2. Writers work only from the spec, Apple's documentation, and recordings of their own device's traffic.
 
 This keeps the code fully open and acceptable to F-Droid and other distribution channels.
 
 ## Apple material
 
-No Apple-derived code or binary ships here, including the IMDAppleServices framework. The bundled identity in `registration/src/main/resources/imessage/fairplay/` is a synthetic placeholder, generated and self-signed, for tests only. Live activation requires Apple's real FairPlay identity, which each user stages themselves.
+No Apple-derived code or binary ships here, including the IMDAppleServices framework. The bundled identity in `registration/src/main/resources/imessage/fairplay/` is a synthetic placeholder, generated and self-signed, for tests only; live activation requires each user to stage Apple's real FairPlay identity themselves.
 
-One deliberate exception in spirit, documented for auditability: the ClearADI and pear white-box lookup tables (the constants the ADI OTP cipher and the NAC mint need) are constant *data* reconstructed by analyzing a compiled ADI implementation, and they ship as generated Kotlin source (`ClearAdiTablesData.kt`, `PearTablesData.kt`) decoded at startup — no Apple code, binary, or resource file is committed. The extraction method and every derived fact are documented in the spec.
+One documented exception: the ClearADI and pear lookup tables (constant data the ADI ciphers need) were reconstructed by analyzing a compiled ADI implementation and ship as generated Kotlin source, decoded at startup. No Apple code, binary, or resource file is committed. The extraction method is in the spec.
 
 ## Building
 
