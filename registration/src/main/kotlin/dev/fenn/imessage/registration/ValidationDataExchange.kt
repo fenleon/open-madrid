@@ -115,6 +115,43 @@ class ValidationCertClient(
     }
 }
 
+/**
+ * The step-1 `cert` data's framing (observed live 2026-10-12; byte-identical to the
+ * 2026-10-08 capture the replay fed `ValidationCtx::new`): `u8 0x01 ‖ u8 certCount ‖
+ * per cert — u16be(0x0000) entry type ‖ u16be(len) ‖ DER`, len = the full DER byte
+ * count, leaf LAST (the live chain is ["Apple System Integration Certification
+ * Authority" (intermediate), "DRM Technologies A01" (session identity cert — the
+ * public key the step-2 blob's OAEP encrypts under)]). A bare DER (no framing) passes
+ * through as a single-cert chain — the OAEP then fails loudly on anything else.
+ */
+object ValidationCertChain {
+
+    fun parse(data: ByteArray): List<ByteArray> {
+        if (data.size > 4 && data[0] == 0x30.toByte() && data[1] == 0x82.toByte()) {
+            return listOf(data)
+        }
+        val buf = java.nio.ByteBuffer.wrap(data).order(java.nio.ByteOrder.BIG_ENDIAN)
+        require(buf.remaining() >= 2 && buf.get() == 0x01.toByte()) {
+            "step-1 cert data: missing the 0x01 framing version byte"
+        }
+        val count = buf.get().toInt() and 0xff
+        require(count > 0) { "step-1 cert data: zero certs in the framing" }
+        val certs = ArrayList<ByteArray>(count)
+        repeat(count) {
+            require(buf.remaining() >= 4) { "step-1 cert data: truncated cert entry" }
+            buf.short // entry type — observed 0x0000 on every live cert
+            val len = buf.short.toInt() and 0xffff
+            require(len in 5..buf.remaining()) {
+                "step-1 cert data: cert entry length $len out of range"
+            }
+            val der = ByteArray(len)
+            buf.get(der)
+            certs.add(der)
+        }
+        return certs
+    }
+}
+
 /** One completed generation: the §1.1 validation blob and when it was minted. */
 class ValidationData(
     /** The final blob — verbatim into the register body's `validation-data` field (§1.4). */

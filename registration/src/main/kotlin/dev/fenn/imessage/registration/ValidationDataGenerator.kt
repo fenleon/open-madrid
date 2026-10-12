@@ -81,6 +81,40 @@ class HardwareConfiguration(
             EncLabel.MLB to mlbEnc,
         )
 
+    /**
+     * The `session250` NAC-mint input (C56-c, CLOSED 2026-10-12): the closed
+     * `HardwareConfig::to_bin` serialization (NAC-NOTES.md "C56-c HardwareConfig grammar
+     * CLOSED" — static disasm byte-verified against a live 250-B capture). Wire grammar:
+     * `write_str(s)` = `u8(len+1) ‖ s.utf8 ‖ 00`, `write_item(b)` = `u8(len) ‖ b`; serial
+     * order — product name, MAC address (raw 6 B, no prefix), serial, platform UUID,
+     * root-disk UUID, board ID, OS build, the constant `00 03 0b 52`, then the seven binary
+     * items in Mac-Hardware-Info export field order: serialEnc, platformUuidEnc,
+     * rootDiskUuidEnc, ROM, romEnc, MLB (ASCII bytes, no NUL), mlbEnc.
+     *
+     * The raw second field is the MAC address — the earlier "ROM @ struct+0x138" reading is
+     * corrected by the live capture: the 6-B Vec item carries the multicast bit (a MAC never
+     * does), and the stub's field types put the inline `[u8;6]` MAC at that slot.
+     */
+    fun toBin(): ByteArray {
+        val out = java.io.ByteArrayOutputStream()
+        writeStr(out, productName)
+        out.write(macAddress)
+        writeStr(out, platformSerial)
+        writeStr(out, platformUuid)
+        writeStr(out, rootDiskUuid)
+        writeStr(out, boardId)
+        writeStr(out, osBuildNumber)
+        out.write(TO_BIN_CONSTANT)
+        writeItem(out, serialEnc)
+        writeItem(out, platformUuidEnc)
+        writeItem(out, rootDiskUuidEnc)
+        writeItem(out, rom)
+        writeItem(out, romEnc)
+        writeItem(out, mlb.toByteArray(Charsets.UTF_8))
+        writeItem(out, mlbEnc)
+        return out.toByteArray()
+    }
+
     /** The recorded §1.1 obfuscation labels, mapped to their fields. */
     object EncLabel {
         const val SERIAL = "Gq3489ugfi"
@@ -92,6 +126,34 @@ class HardwareConfiguration(
 
     companion object {
         const val MAC_ADDRESS_BYTES = 6
+
+        /** The to_bin constant dword (rodata, stored LE — `00 03 0b 52` on the wire). */
+        val TO_BIN_CONSTANT = byteArrayOf(0x00, 0x03, 0x0b, 0x52.toByte())
+
+        private fun writeStr(out: java.io.ByteArrayOutputStream, s: String) {
+            val bytes = s.toByteArray(Charsets.UTF_8)
+            writePrefixed(out, bytes, prefixLength = bytes.size + 1, what = "string")
+            out.write(0)
+        }
+
+        private fun writeItem(out: java.io.ByteArrayOutputStream, bytes: ByteArray) {
+            writePrefixed(out, bytes, prefixLength = bytes.size, what = "binary item")
+        }
+
+        private fun writePrefixed(
+            out: java.io.ByteArrayOutputStream,
+            bytes: ByteArray,
+            prefixLength: Int,
+            what: String,
+        ) {
+            if (prefixLength > 0xff) {
+                throw ValidationDataException(
+                    "hardware-config $what of ${bytes.size} bytes exceeds the u8 length prefix (C56-c grammar)",
+                )
+            }
+            out.write(prefixLength)
+            out.write(bytes)
+        }
 
         /** Builds the configuration from a parsed export payload; loud on any §1.1-required absence. */
         fun from(identifiers: MacHardwareIdentifiers): HardwareConfiguration = from(

@@ -10,19 +10,15 @@ package dev.fenn.imessage.registration
  * Input mappings from the live exchange (2026-10-08, three instrumented runs; §1.1):
  * - pearKey16 — 16 fresh client RNG bytes (created in ValidationCtx::new; wrapped to the
  *   server inside the step-2 request blob).
- * - rngPad130 — 130 fresh client RNG bytes (the scramble buffer's thread-RNG filler).
+ * - rngPad — the scramble buffer's thread-RNG filler: `0x17c − session250.size` fresh
+ *   client RNG bytes (130 on the capture machine, whose session250 is 250 B).
  * - rand16 — 16 fresh client RNG bytes (the mint's own sample).
  * - body576 — keyEstablishment payload[2:578] (the EstablishKeyResponse payload region).
  * - cert79 — keyEstablishmentFull trailing[0:79] (server material from the response —
  *   NOT the step-1 certificate).
- * Still NOT established (§1.1 C56-a/C56-c residue): the step-2 request blob's field
- * construction and the session250 hardware-config serialization — callers must not
- * fabricate them; run the exchange and fail loudly at the first unestablished mapping.
- *
- * KNOWN LIVE DIVERGENCE (§1.1, 2026-10-08): the sig16 pipeline (NacSign) is byte-exact
- * vs the session-20 captures and the python model, but produces a WRONG sig16 for
- * fresh live inputs (all four sign::sign args byte-verified; two independent runs) —
- * do not ship a live mint until §1.1's sign-model residue is closed.
+ * Established (§1.1 rev 33/35 + C56-c): the request blob ([NacRequestBlob]) and the
+ * session250 hardware-config serialization ([HardwareConfiguration.toBin]) — no input
+ * mapping remains open.
  */
 object NacMint {
 
@@ -30,10 +26,10 @@ object NacMint {
     fun mint(
         cert79: ByteArray,
         session250: ByteArray,
-        rngPad130: ByteArray,
+        rngPad: ByteArray,
         rand16: ByteArray,
         body576: ByteArray,
-    ): ByteArray = NacValidation.mint(cert79, session250, rngPad130, rand16, body576)
+    ): ByteArray = NacValidation.mint(cert79, session250, rngPad, rand16, body576)
 
     /** [NacValidation.keyEstablishment] — the SDAT-mapped EstablishKeyResponse wire. */
     fun keyEstablishment(sessionInfo: ByteArray, pearKey16: ByteArray): ByteArray =

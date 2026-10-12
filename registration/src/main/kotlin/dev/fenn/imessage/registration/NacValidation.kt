@@ -46,11 +46,11 @@ internal object NacValidation {
     internal fun mint(
         cert79: ByteArray,
         session250: ByteArray,
-        rngPad130: ByteArray,
+        rngPad: ByteArray,
         rand16: ByteArray,
         body576: ByteArray,
     ): ByteArray {
-        val scrambled = NacMerge.scrambleBody(session250, rngPad130)
+        val scrambled = NacMerge.scrambleBody(session250, rngPad)
         val blob = bodyToBits(scrambled, cert79)
         val sig16 = NacSign.sign(body576, rand16, blob)
         return dataToBits(rand16, sig16, blob)
@@ -60,11 +60,11 @@ internal object NacValidation {
     internal fun mintWithSig(
         cert79: ByteArray,
         session250: ByteArray,
-        rngPad130: ByteArray,
+        rngPad: ByteArray,
         rand16: ByteArray,
         sig16: ByteArray,
     ): ByteArray {
-        val scrambled = NacMerge.scrambleBody(session250, rngPad130)
+        val scrambled = NacMerge.scrambleBody(session250, rngPad)
         return dataToBits(rand16, sig16, bodyToBits(scrambled, cert79))
     }
 
