@@ -350,7 +350,12 @@ class ClearAnisetteProvider(
         const val GSA_HOST = "gsa.apple.com"
         /** The GSA arg the omnisette reference passes (`ProvisioningSession::new(&spim, &[], -2, …)`). */
         const val GSA_ARG: Long = -2L
-        const val FLAVOR_MAC = 0
-        const val FLAVOR_IOS = 1
+        // OTP flavor convention (2026-10-13 live A/B): WIRE-NOTES pins the provisioned Mac
+        // machine's flavor byte at 0x01 — the vendored working client dispatches its OTP on
+        // that byte. Mac = 1 → gen_otp (ClearAdiOtp's "1" branch); IOS = 0 → gen_otp_ios.
+        // The old Mac=0/IOS=1 reading produced frame flavor 0 + the wrong cipher → GSA
+        // ec=-22421 on every live login attempt.
+        const val FLAVOR_MAC = 1
+        const val FLAVOR_IOS = 0
     }
 }

@@ -509,10 +509,13 @@ internal object ClearAdiOtp {
                 Integer.reverseBytes(u32le(ctx, 0x210 + 4 * m) xor u32le(ctx, 0x160 + 4 * m)))
         }
 
-        // B: h[i] = bswap(ctx[0x130+4i]); ctx[0x120..0x130] = [h4..h7] (17fbb81-17fbc89)
+        // B: h[i] = bswap(ctx[0x130+4i]); ctx[0x120..0x130] = [h4..h7]; ctx[0x110..0x120] =
+        // [h3,h2,h1,h0] — this block IS consumed by the tail (live-verified 2026-10-13: the
+        // fitted "written but never read / order [h3,h1,h2,h0]" reading was wrong; a wrong
+        // 0x110 block makes the sig verify structurally but mismatch → GSA ec=-29004).
         val h = IntArray(8) { Integer.reverseBytes(u32le(ctx, 0x130 + 4 * it)) }
         for (i in 0 until 4) putU32le(ctx, 0x120 + 4 * i, h[4 + i])
-        // (ctx[0x110..0x120] = [h3,h1,h2,h0] is written by the binary but never read)
+        for (i in 0 until 4) putU32le(ctx, 0x110 + 4 * i, h[3 - i])
 
         // C: key schedule (17fbd39-17fbd6e)
         val hi0 = t.wordTable(0x251ac0); val hi1 = t.wordTable(0x251ec0)
