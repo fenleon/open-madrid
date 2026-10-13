@@ -54,16 +54,30 @@ import java.security.spec.PKCS8EncodedKeySpec
  */
 class BundledFairPlaySigner(
     private val logEvent: (String) -> Unit = {},
+    /**
+     * Out-of-repo identity override (DER leaf, PEM PKCS#1 key) — the committed classpath
+     * identity is a self-signed PLACEHOLDER (`CN = open-madrid-placeholder`): Apple bytes
+     * cannot ship in the public repo, so real activations need the genuine FairPlay pair
+     * supplied here (the accepted live identity; kept in a gitignored local directory).
+     * Null = the bundled placeholder (fine for shape tests, refused live with
+     * SIGNATURE_VERIFICATION_FAILED — pinned 2026-10-13).
+     */
+    private val overrideLeafCertDer: ByteArray? = null,
+    private val overrideIdentityKeyPem: ByteArray? = null,
 ) : FairPlaySigner {
 
     private val leafChain: ByteArray by lazy {
-        resource(LEAF_CERT_RESOURCE) + resource(FAIRPLAY_CA_RESOURCE) + resource(ROOT_CA_RESOURCE)
+        (overrideLeafCertDer ?: resource(LEAF_CERT_RESOURCE)) +
+            resource(FAIRPLAY_CA_RESOURCE) + resource(ROOT_CA_RESOURCE)
     }
 
     private val identityKey: RSAPrivateKey by lazy { loadPrivateKey() }
 
     override fun sign(activationInfoPlist: ByteArray): FairPlayMaterial {
-        logEvent("fairplay: signing the activation-info plist with the bundled identity")
+        logEvent(
+            if (overrideLeafCertDer != null) "fairplay: signing the activation-info plist with the supplied identity"
+            else "fairplay: signing the activation-info plist with the bundled identity",
+        )
         val signer = Signature.getInstance(SIGNATURE_ALGORITHM)
         signer.initSign(identityKey)
         signer.update(activationInfoPlist)
@@ -85,7 +99,8 @@ class BundledFairPlaySigner(
      * never re-encoded beyond the envelope.
      */
     private fun loadPrivateKey(): RSAPrivateKey {
-        val pkcs1 = Pem.decode(resource(IDENTITY_KEY_RESOURCE).decodeToString(), PKCS1_TYPE)
+        val pkcs1Pem = overrideIdentityKeyPem ?: resource(IDENTITY_KEY_RESOURCE)
+        val pkcs1 = Pem.decode(pkcs1Pem.decodeToString(), PKCS1_TYPE)
         val pkcs8 = Der.sequence(
             Der.integer(BigInteger.ZERO),
             Der.sequence(Der.oid(OID_RSA_ENCRYPTION), Der.nullValue()),
