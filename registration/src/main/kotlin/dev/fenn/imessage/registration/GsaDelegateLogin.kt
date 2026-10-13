@@ -130,8 +130,10 @@ data class IdsDelegateCredentials(
 )
 
 /**
- * The delegate login of spec §1.5: POST `https://setup.icloud.com/setup/signin/v2/login` with
- * Basic `username:PET` auth and the recorded header set; the response's `com.apple.private.ids`
+ * The delegate login of spec §1.5: POST the configured endpoint (the recorded
+ * `/setup/signin/v2/login` with the V2 body + Basic auth; the vendored reference's
+ * `/setup/prefpane/login` with the V1 `AuthRequest` body — credentials in the body,
+ * RE 2026-10-13) with the recorded header set; the response's `com.apple.private.ids`
  * delegate serviceData yields the IDS `authToken`/`profileId`.
  */
 class GsaDelegateLoginClient(
@@ -144,29 +146,45 @@ class GsaDelegateLoginClient(
         logEvent("gsa: iCloud sign-in")
         val basic = Base64.getEncoder()
             .encodeToString("${request.username}:${request.pet}".toByteArray(Charsets.UTF_8))
+        val delegates = linkedMapOf<String, Any?>(
+            IDS_DELEGATE_BUNDLE_ID to linkedMapOf("protocol-version" to "4"),
+            MOBILEME_DELEGATE_BUNDLE_ID to linkedMapOf<String, Any?>(),
+        )
+        // The vendored reference (open_absinthe, RE 2026-10-13) ships ONLY the V1 request
+        // shape on this endpoint: kebab-case `AuthRequest {apple-id, client-id, delegates,
+        // password}` with the PET in the body and NO Authorization header — the .so has no
+        // V2AuthRequest/protocolVersion/userInfo strings at all. The V2 wrapper is kept for
+        // the recorded v2 endpoint (§1.5 C59).
+        val prefpane = endpoint == PREFPANE_ENDPOINT
+        val body = if (prefpane) {
+            linkedMapOf<String, Any?>(
+                "apple-id" to request.username,
+                "client-id" to request.clientId.lowercase(),
+                "delegates" to delegates,
+                "password" to request.pet,
+            )
+        } else {
+            linkedMapOf<String, Any?>(
+                "delegates" to delegates,
+                "protocolVersion" to PROTOCOL_VERSION,
+                "userInfo" to linkedMapOf<String, Any?>(
+                    // rev 26 (live 2026-10-04): the sign-in body's client id rides kebab-case
+                    // (`client-id` — the recorded upstream identity struct is kebab-case on the
+                    // wire); "clientId" was the one body delta vs the live request capture.
+                    "client-id" to request.clientId,
+                    "language" to "en-US",
+                    "timezone" to request.timezone,
+                ),
+            )
+        }
         val headers = buildMap {
             putAll(request.anisette)
-            put("Authorization", "Basic $basic")
+            if (!prefpane) put("Authorization", "Basic $basic")
             put(HEADER_NAS_QUALIFY, Base64.getEncoder().encodeToString(request.validationData))
             put(HEADER_ADSID, request.adsid)
             put(HEADER_CLIENT_INFO, request.clientInfo)
             put("User-Agent", SIGNIN_USER_AGENT)
         }
-        val body = linkedMapOf<String, Any?>(
-            "delegates" to linkedMapOf<String, Any?>(
-                IDS_DELEGATE_BUNDLE_ID to linkedMapOf("protocol-version" to "4"),
-                MOBILEME_DELEGATE_BUNDLE_ID to linkedMapOf<String, Any?>(),
-            ),
-            "protocolVersion" to PROTOCOL_VERSION,
-            "userInfo" to linkedMapOf<String, Any?>(
-                // rev 26 (live 2026-10-04): the sign-in body's client id rides kebab-case
-                // (`client-id` — the recorded upstream identity struct is kebab-case on the
-                // wire); "clientId" was the one body delta vs the live request capture.
-                "client-id" to request.clientId,
-                "language" to "en-US",
-                "timezone" to request.timezone,
-            ),
-        )
         val encoded = XmlPlist.encode(body)
         val response = http.post(endpoint, headers, encoded, CONTENT_TYPE)
         if (response.status != 200) {

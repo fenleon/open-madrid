@@ -100,6 +100,33 @@ class GsaDelegateLoginTest {
     }
 
     @Test
+    fun `prefpane endpoint posts the vendored V1 body without Basic auth`() = runBlocking {
+        val http = ScriptedIdsHttp(listOf(IdsHttpResponse(200, emptyMap(), okResponse())))
+        GsaDelegateLoginClient(
+            http,
+            endpoint = GsaDelegateLoginClient.PREFPANE_ENDPOINT,
+        ).signIn(request())
+
+        val call = http.calls.single()
+        assertEquals(GsaDelegateLoginClient.PREFPANE_ENDPOINT, call.url)
+        assertNull(call.headers["Authorization"])
+        assertEquals(Base64.getEncoder().encodeToString(byteArrayOf(1, 2, 3)), call.headers["X-Mme-Nas-Qualify"])
+
+        val body = XmlPlist.decode(call.body) as Map<*, *>
+        assertEquals("user@example.com", body["apple-id"])
+        assertEquals("pet-token", body["password"])
+        // the vendored V1 client-id is a plain v4 UUID (no uppercase, RE 2026-10-13)
+        assertEquals("a1b2c3d4-e5f6-4789-abcd-0123456789ab", body["client-id"])
+        assertEquals(
+            setOf("apple-id", "client-id", "delegates", "password"),
+            body.keys,
+        )
+        val delegates = body["delegates"] as Map<*, *>
+        assertEquals(mapOf("protocol-version" to "4"), delegates["com.apple.private.ids"])
+        assertEquals(emptyMap<String, String>(), delegates["com.apple.mobileme"])
+    }
+
+    @Test
     fun `posts the recorded body and headers`() = runBlocking {
         val http = ScriptedIdsHttp(listOf(IdsHttpResponse(200, emptyMap(), okResponse())))
         client(http).signIn(request())
