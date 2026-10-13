@@ -240,6 +240,13 @@ class GsaDelegateLoginClient(
 
     companion object {
         const val SIGNIN_ENDPOINT = "https://setup.icloud.com/setup/signin/v2/login"
+
+        /**
+         * The reference client's delegate sign-in endpoint (.so strings, 2026-10-13) — same
+         * header/body family as [SIGNIN_ENDPOINT]; the endpoint where its delegate sign-ins
+         * succeed live (the recorded v2 form answers 409 ICLOUD_UNSUPPORTED_DEVICE).
+         */
+        const val PREFPANE_ENDPOINT = "https://setup.icloud.com/setup/prefpane/login"
         const val CONTENT_TYPE = "application/x-apple-plist"
         const val PROTOCOL_VERSION = "1.0"
         const val IDS_DELEGATE_BUNDLE_ID = "com.apple.private.ids"

@@ -134,13 +134,20 @@ class GsaLoginChain(
     private val twoFactorHeaders: suspend () -> GsaTwoFactorHeaders? = { null },
     /** The §1.5 akd-variant headers of the GSA POSTs (C59 values) — null omits them. */
     private val headerConfig: GsaHeaderConfig? = null,
+    /**
+     * The delegate sign-in endpoint. The recorded form is `/setup/signin/v2/login` (§1.5 C59);
+     * the reference client (vendored rustpush/open_absinthe, .so strings 2026-10-13) uses
+     * `/setup/prefpane/login` — which is where its delegate sign-ins succeed while the
+     * recorded endpoint answers 409 ICLOUD_UNSUPPORTED_DEVICE (live 2026-10-03/13).
+     */
+    val delegateEndpoint: String = GsaDelegateLoginClient.SIGNIN_ENDPOINT,
     private val random: SecureRandom = SecureRandom(),
     private val clock: () -> Long = System::currentTimeMillis,
     private val logEvent: (String) -> Unit = {},
 ) {
 
     private val loginClient = GsaLoginClient(http, logEvent = logEvent)
-    private val delegateClient = GsaDelegateLoginClient(http, logEvent = logEvent)
+    private val delegateClient = GsaDelegateLoginClient(http, endpoint = delegateEndpoint, logEvent = logEvent)
 
     /** §1.5: the filtered anisette header set + the akd-variant headers, one per login. */
     private suspend fun gsaHeaders(): Map<String, String> =
