@@ -100,7 +100,7 @@ class GsaDelegateLoginTest {
     }
 
     @Test
-    fun `prefpane endpoint posts the vendored V1 body without Basic auth`() = runBlocking {
+    fun `prefpane endpoint posts the vendored V1 body with Basic auth`() = runBlocking {
         val http = ScriptedIdsHttp(listOf(IdsHttpResponse(200, emptyMap(), okResponse())))
         GsaDelegateLoginClient(
             http,
@@ -109,7 +109,8 @@ class GsaDelegateLoginTest {
 
         val call = http.calls.single()
         assertEquals(GsaDelegateLoginClient.PREFPANE_ENDPOINT, call.url)
-        assertNull(call.headers["Authorization"])
+        assertEquals("Basic " + Base64.getEncoder().encodeToString("user@example.com:pet-token".toByteArray()),
+            call.headers["Authorization"])
         assertEquals(Base64.getEncoder().encodeToString(byteArrayOf(1, 2, 3)), call.headers["X-Mme-Nas-Qualify"])
 
         val body = XmlPlist.decode(call.body) as Map<*, *>

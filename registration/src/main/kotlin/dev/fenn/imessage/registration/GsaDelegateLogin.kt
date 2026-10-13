@@ -152,9 +152,11 @@ class GsaDelegateLoginClient(
         )
         // The vendored reference (open_absinthe, RE 2026-10-13) ships ONLY the V1 request
         // shape on this endpoint: kebab-case `AuthRequest {apple-id, client-id, delegates,
-        // password}` with the PET in the body and NO Authorization header — the .so has no
-        // V2AuthRequest/protocolVersion/userInfo strings at all. The V2 wrapper is kept for
-        // the recorded v2 endpoint (§1.5 C59).
+        // password}` with the PET in the body — the .so has no V2AuthRequest/protocolVersion/
+        // userInfo strings at all. Basic `username:PET` still rides (the closure's
+        // basic_auth needs no string constants; live 2026-10-13: V1 body WITHOUT Basic →
+        // 401 UNAUTHORIZED, so the server reads Basic even on the V1 shape). The V2 wrapper
+        // is kept for the recorded v2 endpoint (§1.5 C59).
         val prefpane = endpoint == PREFPANE_ENDPOINT
         val body = if (prefpane) {
             linkedMapOf<String, Any?>(
@@ -179,7 +181,7 @@ class GsaDelegateLoginClient(
         }
         val headers = buildMap {
             putAll(request.anisette)
-            if (!prefpane) put("Authorization", "Basic $basic")
+            put("Authorization", "Basic $basic")
             put(HEADER_NAS_QUALIFY, Base64.getEncoder().encodeToString(request.validationData))
             put(HEADER_ADSID, request.adsid)
             put(HEADER_CLIENT_INFO, request.clientInfo)
