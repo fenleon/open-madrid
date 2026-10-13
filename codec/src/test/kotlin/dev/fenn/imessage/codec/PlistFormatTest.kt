@@ -22,6 +22,12 @@ class PlistFormatTest {
     }
 
     @Test
+    fun bareDictFragmentDispatchesToTheXmlCodec() {
+        // GSA's decrypted spd is a bare <dict> with no <plist> wrapper (live 2026-10-13)
+        assertEquals(mapOf("a" to 1L), Plist.parse("<dict><key>a</key><integer>1</integer></dict>".toByteArray()))
+    }
+
+    @Test
     fun xmlWithoutDeclarationDispatchesOnThePlistRoot() {
         assertEquals(
             mapOf("a" to 1L),

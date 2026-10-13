@@ -90,7 +90,8 @@ class ValidationCertClient(
         val dict = dictOf(response.body, "step-2 response")
         return dict["session-info"] as? ByteArray
             ?: throw ValidationDataException(
-                "step-2 response has no 'session-info' data field (§1.1; got ${typeName(dict["session-info"])})",
+                "step-2 response has no 'session-info' data field (§1.1; got ${typeName(dict["session-info"])})" +
+                    statusDetail(dict),
             )
     }
 
@@ -102,6 +103,18 @@ class ValidationCertClient(
         }
         return stringKeyedDictOrNull(parsed)
             ?: throw ValidationDataException("$what is ${typeName(parsed)}, expected a dict (§1.1)")
+    }
+
+    /** Scalar fields of an error response (Status ec/em/mnemonic) — never the data blobs. */
+    private fun statusDetail(dict: Map<String, Any?>): String {
+        fun scalars(d: Map<String, Any?>, prefix: String): String =
+            d.entries.filter { it.value is String || it.value is Long || it.value is Int }
+                .joinToString(" ") { "$prefix${it.key}=${it.value}" }
+        val status = stringKeyedDictOrNull(dict["Status"] ?: dict["status"])
+        return listOfNotNull(
+            scalars(dict, "").ifEmpty { null },
+            status?.let { scalars(it, "Status.") },
+        ).joinToString(" ", prefix = " [", postfix = "]").ifBlank { "" }
     }
 
     companion object {

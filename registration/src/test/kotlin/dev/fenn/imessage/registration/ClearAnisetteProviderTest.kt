@@ -204,10 +204,11 @@ class ClearAnisetteProviderTest {
     @Test
     fun anisetteHeadersUseRealOtpDerivation() {
         val metadata = ByteArray(60) { 0x11.toByte() }
-        val mid = ByteArray(32) { 0x22.toByte() }
+        val mid = ByteArray(60) { 0x22.toByte() }
+        val clientSecret = ByteArray(32) { 0x33.toByte() }
         val keychain = hex("000102030405060708090a0b0c0d0e0f")
         val now = 1_700_000_000_000L
-        val anisette = ClearAdiAnisette(metadata, mid, ClearAnisetteProvider.FLAVOR_MAC, "1710631289", keychain, "MacBookPro18,1") { now }
+        val anisette = ClearAdiAnisette(metadata, mid, clientSecret, ClearAnisetteProvider.FLAVOR_MAC, "1710631289", keychain, "MacBookPro18,1") { now }
         val headers = anisette.headers()
         assertEquals("UTC", headers["X-Apple-I-TimeZone"])
         assertEquals("en_US", headers["X-Apple-Locale"])
@@ -215,8 +216,8 @@ class ClearAnisetteProviderTest {
         assertEquals("2023-11-14T22:13:20Z", headers["X-Apple-I-Client-Time"])
         assertEquals("00010203-0405-0607-0809-0a0b0c0d0e0f", headers["X-Mme-Device-Id"])
         assertEquals(Base64.getEncoder().encodeToString(mid), headers["X-Apple-I-MD-M"])
-        // the OTP must be the real derivation: recompute and compare
-        val otp = ClearAdiOtp.anisetteOtp(ClearAnisetteProvider.FLAVOR_MAC, metadata, mid, now / 1000)
+        // the OTP must be the real derivation over clientSecret (the mid is NOT an OTP input)
+        val otp = ClearAdiOtp.anisetteOtp(ClearAnisetteProvider.FLAVOR_MAC, metadata, clientSecret, now / 1000)
         assertEquals(Base64.getEncoder().encodeToString(otp), headers["X-Apple-I-MD"])
         assertEquals(28, Base64.getDecoder().decode(headers["X-Apple-I-MD"]!!).size)
     }

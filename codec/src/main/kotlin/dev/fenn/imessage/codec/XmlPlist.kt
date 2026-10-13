@@ -38,6 +38,9 @@ object XmlPlist {
             throw PlistFormatException("malformed XML plist: ${e.message}")
         }
         val root = document.documentElement ?: throw PlistFormatException("empty XML document")
+        // GSA's decrypted spd is a bare <dict> fragment (no <plist> wrapper — live 2026-10-13);
+        // accept it as the value directly.
+        if (root.tagName == "dict") return value(root)
         if (root.tagName != "plist") throw PlistFormatException("<${root.tagName}> is not a <plist>")
         val values = elementChildren(root)
         if (values.size != 1) {

@@ -56,12 +56,15 @@ typealias ClearAdiProvisionResult = ProvisionedAnisette
  * client time ISO-8601 with a trailing `Z`, fixed UTC/en_US, rinfo from the state, the UUID
  * form of the 16-byte keychain identifier as `X-Mme-Device-Id`).
  *
- * Takes (metadata, mid, flavor) directly — the ProvisionedData→fields mapping is
- * TODO(live-capture), so the caller wires them once the capture names the bytes.
+ * Takes (metadata, mid, clientSecret, flavor): the OTP's `two` input is the 32-B
+ * client_secret (live-pinned 2026-10-13 via the vendored client's gen_otp entry args —
+ * mid[0:32] there yields a well-formed but wrong-sig OTP, GSA ec=-29004); `mid` feeds only
+ * the X-Apple-I-MD-M header.
  */
 class ClearAdiAnisette(
     val metadata: ByteArray,
     val mid: ByteArray,
+    val clientSecret: ByteArray,
     val flavor: Int,
     val rinfo: String,
     private val keychainIdentifier: ByteArray,
@@ -72,7 +75,7 @@ class ClearAdiAnisette(
 
     /** The real derivation — the one-time identifier input is unused (the OTP is time-windowed). */
     override fun otp(input: AnisetteOtpInput): ByteArray =
-        ClearAdiOtp.anisetteOtp(flavor, metadata, mid, clock() / 1000)
+        ClearAdiOtp.anisetteOtp(flavor, metadata, clientSecret, clock() / 1000)
 
     /** The header map, in the reference's get_headers order. */
     fun headers(): Map<String, String> {
@@ -264,6 +267,7 @@ class ClearAnisetteProvider(
         ClearAdiAnisette(
             metadata = state.metadata,
             mid = state.mid,
+            clientSecret = state.clientSecret,
             flavor = state.flavor,
             rinfo = state.rinfo,
             keychainIdentifier = keychainIdentifier,

@@ -1135,18 +1135,18 @@ internal object ClearAdiOtp {
     // ---- frame builders (generate_sig 0x17eead0 / generate_otp 0x17ee2a0 / gen_2fa_code) --
 
     /** 28-byte X-Apple-I-MD payload: u32be(5) ‖ u32be(16) ‖ sig16 ‖ u32be(flavor). */
-    fun anisetteOtp(flavor: Int, metadata: ByteArray, mid: ByteArray, unixSeconds: Long): ByteArray {
+    fun anisetteOtp(flavor: Int, metadata: ByteArray, clientSecret: ByteArray, unixSeconds: Long): ByteArray {
         val gen = (unixSeconds / 30).toInt().toUInt()
-        // `metadata` feeds the cipher as `one` = the machine's client_info (≥ 0x190 B IOS /
-        // ≥ 0xd0 B Mac, otp-path.md §3). Until the live capture pins the
-        // ProvisionedData→client_info mapping, shorter inputs are zero-extended to the
-        // flavor's minimum (deterministic placeholder). TODO(live-capture)
+        // `metadata` feeds the cipher as `one` = the machine's provisioned 400-B metadata blob
+        // (live-pinned 2026-10-13; a live provisioning run always produces 400 B, so the
+        // zero-extension below never triggers on a real machine). `clientSecret` is the
+        // cipher's `two` (32-B RNG draw 2; the mid is NOT an OTP input — live-pinned).
         val need = if (flavor == 1) 0x190 else 0xd0
         val one = if (metadata.size >= need) metadata else metadata + ByteArray(need - metadata.size)
         // flavor 1 (IOS) -> gen_otp; flavor 0 (Mac) -> gen_otp_ios (naming inverted in the binary)
         val sig = when (flavor) {
-            1 -> genOtp(gen, one, mid)
-            else -> genOtpIos(gen, one, mid)
+            1 -> genOtp(gen, one, clientSecret)
+            else -> genOtpIos(gen, one, clientSecret)
         }
         val out = ByteArray(28)
         out[0] = 0; out[1] = 0; out[2] = 0; out[3] = 5
@@ -1161,11 +1161,11 @@ internal object ClearAdiOtp {
     fun twoFactorCode(
         flavor: Int,
         metadata: ByteArray,
-        mid: ByteArray,
+        clientSecret: ByteArray,
         secret: ByteArray,
         unixSeconds: Long,
     ): UInt {
-        val frame = anisetteOtp(flavor, metadata, mid, unixSeconds)
+        val frame = anisetteOtp(flavor, metadata, clientSecret, unixSeconds)
         return genCode(frame.copyOfRange(8, 24), secret)
     }
 }

@@ -45,13 +45,13 @@ object Plist {
     private fun startsWithBinaryMagic(b: ByteArray): Boolean =
         b.size >= BINARY_MAGIC.size && BINARY_MAGIC.indices.all { b[it] == BINARY_MAGIC[it] }
 
-    /** Optional UTF-8 BOM, then optional whitespace, then `<?xml` or `<plist`. */
+    /** Optional UTF-8 BOM, then optional whitespace, then `<?xml`, `<plist`, or a bare `<dict` (GSA spd form). */
     private fun startsWithXml(b: ByteArray): Boolean {
         var i = 0
         if (b.size >= 3 && b[0] == 0xEF.toByte() && b[1] == 0xBB.toByte() && b[2] == 0xBF.toByte()) i = 3
         while (i < b.size && WHITESPACE.any { it == b[i] }) i++
         val head = String(b, i, minOf(6, b.size - i), Charsets.US_ASCII)
-        return head.startsWith("<?xml") || head.startsWith("<plist")
+        return head.startsWith("<?xml") || head.startsWith("<plist") || head.startsWith("<dict")
     }
 
     private fun preview(b: ByteArray): String {
