@@ -125,6 +125,14 @@ class CourierClient(
     private var socket: SSLSocket? = null
     private val writeLock = Any()
 
+    /** Unblocks a blocking reader immediately: closes the live socket (idempotent). The
+     * reader loop sits in a read with soTimeout=0, which job cancellation alone cannot
+     * interrupt — stop() used to hang until the keepalive watchdog tore the socket down
+     * (~180 s, observed live 2026-10-13), stalling everything sequenced after a stop. */
+    fun shutdown() {
+        runCatching { socket?.close() }
+    }
+
     /** Random message id for send messages: 1..2^31−1 (spec §3.3). */
     // The two-arg origin-bound nextInt is a desktop-JVM API ART lacks (NoSuchMethodError
     // on-device, found by the service smoke) — use the classic bound form everywhere.

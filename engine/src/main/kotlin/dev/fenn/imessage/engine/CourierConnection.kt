@@ -65,9 +65,14 @@ class CourierConnection(
         }
     }
 
-    /** Cancels the session (closes the socket with it). Suspend: waits for the loop to exit. */
+    /** Cancels the session. Suspends only until the socket is closed and the loop exits —
+     * the socket close is what actually unblocks the reader (see [CourierClient.shutdown]). */
     suspend fun stop() {
-        job?.let { job -> job.cancel(); job.join() }
+        job?.let { job ->
+            job.cancel()
+            client.shutdown()
+            job.join()
+        }
         _state.value = State.DISCONNECTED
     }
 
