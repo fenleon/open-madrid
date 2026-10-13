@@ -149,8 +149,7 @@ class GsaDelegateLoginClient(
         val delegates = linkedMapOf<String, Any?>(
             IDS_DELEGATE_BUNDLE_ID to linkedMapOf("protocol-version" to "4"),
             MOBILEME_DELEGATE_BUNDLE_ID to linkedMapOf<String, Any?>(),
-        )
-        // The vendored reference (open_absinthe, RE 2026-10-13) ships ONLY the V1 request
+        ) // The vendored reference (open_absinthe, RE 2026-10-13) ships ONLY the V1 request
         // shape on this endpoint: kebab-case `AuthRequest {apple-id, client-id, delegates,
         // password}` with the PET in the body — the .so has no V2AuthRequest/protocolVersion/
         // userInfo strings at all. Basic `username:PET` still rides (the closure's
@@ -188,6 +187,18 @@ class GsaDelegateLoginClient(
             put("User-Agent", SIGNIN_USER_AGENT)
         }
         val encoded = XmlPlist.encode(body)
+        // A/B instrumentation: dump the exact outgoing request (headers + body) when the
+        // marker exists, for a host-side rustls replay with byte-identical content. The
+        // dump carries the Basic credential — /data/local/tmp only, never logged.
+        if (java.io.File("/data/local/tmp/debug-capture-signin").isFile) {
+            runCatching {
+                java.io.File("/data/local/tmp/debug-last-signin.bin").writeBytes(
+                    (listOf("POST $endpoint", "Content-Type: $CONTENT_TYPE") +
+                        headers.entries.map { (k, v) -> "$k: $v" } + listOf("", "")).joinToString("\r\n")
+                        .toByteArray(Charsets.UTF_8) + encoded,
+                )
+            }
+        }
         val response = http.post(endpoint, headers, encoded, CONTENT_TYPE)
         if (response.status != 200) {
             throw GsaLoginException(

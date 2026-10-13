@@ -78,12 +78,18 @@ class ValidationCertClient(
     /**
      * Step 2: POST the single-key `session-info-request` plist body — no anisette, no auth
      * headers (§1.1: body only) — and return the response's `session-info` data.
+     * [extraHeaders] rides verbatim (the A/B instrumentation: whether the genuine client
+     * binds the VEN session to an anisette identity here has never been wire-observed —
+     * the only accepted captures predate any anisette test).
      */
-    suspend fun initializeValidation(sessionInfoRequest: ByteArray): ByteArray {
+    suspend fun initializeValidation(
+        sessionInfoRequest: ByteArray,
+        extraHeaders: Map<String, String> = emptyMap(),
+    ): ByteArray {
         val url = bags.idsBag().url(ValidationBagKeys.INITIALIZE)
         logEvent("validation: initializing the validation session")
         val body = XmlPlist.encode(linkedMapOf("session-info-request" to sessionInfoRequest))
-        val response = http.post(url, emptyMap(), body, CONTENT_TYPE)
+        val response = http.post(url, extraHeaders, body, CONTENT_TYPE)
         if (response.status != 200) {
             throw ValidationDataException("POST $url → HTTP ${response.status} (§1.1 step 2)")
         }
