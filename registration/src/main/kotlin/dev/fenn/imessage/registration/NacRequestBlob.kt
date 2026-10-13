@@ -19,6 +19,11 @@ import javax.crypto.spec.SecretKeySpec
  *   ‖ u32be(32) — the next field's length marker                                (4 B)
  *   ‖ field32 = blobFieldMap[PearAes.encryptCbc(plain32, iv16, PearAes.initKey(pearKey16))]
  *                                                                               (32 B)
+ *
+ * `iv16 = blobFieldMap⁻¹(slot16)` — the pear-AES IV is never drawn or carried; the server
+ * recomputes it from the wire slot through the inverse of the same substitution table
+ * (pinned 2026-10-13 on the c56j replay dumps: `ecbc_arg_r8 == blobFieldMap⁻¹[blob[266:282]]`
+ * exactly; an independent IV draw is the 5080/EM residue — spec §1.1 rev 42).
  *   ‖ HMAC-SHA1(hmacKey20, field32)                                             (20 B)
  * ```
  *
@@ -62,7 +67,11 @@ object NacRequestBlob {
         val hmacKey20 = draw(20)
         val innerKey16 = draw(16)
         val slot16 = draw(16)
-        val iv16 = draw(16)
+        val fieldMap = PearTables.blobFieldMap
+        val fieldInv = ByteArray(256).also { inv ->
+            for (i in 0 until 256) inv[fieldMap[i].toInt() and 0xff] = i.toByte()
+        }
+        val iv16 = ByteArray(16) { fieldInv[slot16[it].toInt() and 0xff] }
 
         val paesKey = PearAes.initKey(pearKey16)
         val plain32 = ByteArray(32)
@@ -72,7 +81,6 @@ object NacRequestBlob {
         val payloadMap = PearTables.blobPayloadMap
         val mappedPlain = ByteArray(32) { i -> payloadMap[plain32[i].toInt() and 0xff] }
         val enc32 = PearAes.encryptCbc(mappedPlain, iv16, paesKey)
-        val fieldMap = PearTables.blobFieldMap
         val field32 = ByteArray(32) { i -> fieldMap[enc32[i].toInt() and 0xff] }
 
         val oaep = Cipher.getInstance(OAEP_TRANSFORMATION).apply {

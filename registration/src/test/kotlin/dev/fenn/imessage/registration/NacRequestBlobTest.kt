@@ -10,7 +10,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
-/** Synthetic-vector tests for the §1.1 step-2 request blob (C56-a; spec §1.1 rev 35). */
+/** Synthetic-vector tests for the §1.1 step-2 request blob (C56-a; spec §1.1 rev 42). */
 class NacRequestBlobTest {
 
     private class FixedDraw(values: List<ByteArray>) {
@@ -40,7 +40,6 @@ class NacRequestBlobTest {
                 ByteArray(20) { it.toByte() },   // hmacKey20
                 ByteArray(16) { (it + 1).toByte() }, // innerKey16
                 ByteArray(16) { (it + 2).toByte() }, // slot16
-                ByteArray(16) { (it + 3).toByte() }, // iv16
             ),
         )
         val (blob, pearKey16) = blob(pair.public, draw)
@@ -67,10 +66,13 @@ class NacRequestBlobTest {
         val hmacKey20 = ByteArray(20) { (0x40 + it).toByte() }
         val innerKey16 = ByteArray(16) { (0x50 + it).toByte() }
         val slot16 = ByteArray(16) { (0x60 + it).toByte() }
-        val iv16 = ByteArray(16) { (0x70 + it).toByte() }
-        val draw = FixedDraw(listOf(hmacKey20, innerKey16, slot16, iv16))
+        val draw = FixedDraw(listOf(hmacKey20, innerKey16, slot16))
         val (blob, pearKey16) = blob(keyPair().public, draw)
 
+        val fieldInv = ByteArray(256).also { inv ->
+            for (i in 0 until 256) inv[PearTables.blobFieldMap[i].toInt() and 0xff] = i.toByte()
+        }
+        val iv16 = ByteArray(16) { fieldInv[slot16[it].toInt() and 0xff] }
         val plain32 = ByteArray(32)
         plain32[0] = 0x02
         plain32[4] = 0x01
@@ -81,9 +83,29 @@ class NacRequestBlobTest {
         assertContentEquals(field32, blob.copyOfRange(286, 318))
     }
 
+    /** Genuine c56j replay vector: the three real draws must reproduce the blob's every
+     *  deterministic region (OAEP is randomized by construction and checked by length only). */
+    @Test
+    fun c56jReplayVector() {
+        fun hx(s: String) = ByteArray(s.length / 2) { ((Character.digit(s[it * 2], 16) shl 4) + Character.digit(s[it * 2 + 1], 16)).toByte() }
+        val pearKey16 = hx("80422dce4d634e44da4996c8ec871c5f")
+        val hmacKey20 = hx("ccbe18c8d3bca949ec5f5be2060ca8c61a2cc3f4")
+        val innerKey16 = hx("0238210e70ba93d3b0188c21ccc64d17")
+        val slot16 = hx("018c1c81233a8b9d3fb8b9ff94228649")
+        val field32 = hx("16f0af0b2ac8ac222dcfea95d6a7c9ddad8182f3b395502517854d6913d91fc5")
+        val hmac = hx("0f117d2462b730a53797b324fe61c1bfff899348")
+        val draw = FixedDraw(listOf(hmacKey20, innerKey16, slot16))
+        val blob = NacRequestBlob.build(keyPair().public, pearKey16) { n -> draw.next(n) }
+        assertEquals(NacRequestBlob.BLOB_BYTES, blob.size)
+        assertContentEquals(NacRequestBlob.header, blob.copyOfRange(0, 10))
+        assertContentEquals(slot16, blob.copyOfRange(266, 282))
+        assertContentEquals(field32, blob.copyOfRange(286, 318))
+        assertContentEquals(hmac, blob.copyOfRange(318, 338))
+    }
+
     @Test
     fun rejectsWrongPearKeySize() {
-        val draw = FixedDraw(listOf(ByteArray(20), ByteArray(16), ByteArray(16), ByteArray(16)))
+        val draw = FixedDraw(listOf(ByteArray(20), ByteArray(16), ByteArray(16)))
         assertFailsWith<IllegalArgumentException> {
             NacRequestBlob.build(keyPair().public, ByteArray(15)) { n -> draw.next(n) }
         }
