@@ -87,8 +87,10 @@ class AlbertActivationTest {
         assertContentEquals(fairPlayChain, outer["FairPlayCertChain"] as ByteArray)
         assertContentEquals(fairPlaySignature, outer["FairPlaySignature"] as ByteArray)
 
-        // The nested ActivationInfoXML plist carries exactly the nine recorded keys (§1.2).
-        val nested = Plist.parse((outer["ActivationInfoXML"] as String).toByteArray()) as Map<*, *>
+        // The nested ActivationInfoXML rides plist <data> (bytes — rustpush form; the string
+        // form draws the GENERIC_ERROR page, live 2026-10-02/2026-10-13) and carries exactly
+        // the nine recorded keys (§1.2).
+        val nested = Plist.parse((outer["ActivationInfoXML"] as ByteArray)) as Map<*, *>
         assertEquals(
             setOf(
                 "ActivationRandomness", "ActivationState", "BuildVersion", "DeviceCertRequest",

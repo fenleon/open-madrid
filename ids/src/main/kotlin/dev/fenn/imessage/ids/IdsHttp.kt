@@ -70,6 +70,28 @@ object AppleTrust {
     fun defaultTrustManager(): X509TrustManager = trustManager(*embeddedRootDers())
 
     /**
+     * The system store PLUS the embedded Apple roots — for a client that talks to both
+     * Apple-private-anchored endpoints (validation/init.ess/query.ess) and public-CA ones in
+     * the same exchange: albert.apple.com (§1.2 activation) chains to DigiCert Global Root G2
+     * and is rejected by the Apple-roots-only pool ("Trust anchor for certification path not
+     * found", live 2026-10-13).
+     */
+    fun platformTrustManager(): X509TrustManager {
+        val system = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
+            .apply { init(null as KeyStore?) }
+            .trustManagers.filterIsInstance<X509TrustManager>().first()
+        val store = KeyStore.getInstance("PKCS12").apply { load(null, null) }
+        system.acceptedIssuers.forEachIndexed { i, cert -> store.setCertificateEntry("system-$i", cert) }
+        val factory = java.security.cert.CertificateFactory.getInstance("X.509")
+        embeddedRootDers().forEachIndexed { i, der ->
+            store.setCertificateEntry("apple-$i", factory.generateCertificate(ByteArrayInputStream(der)))
+        }
+        return TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
+            .apply { init(store) }
+            .trustManagers.filterIsInstance<X509TrustManager>().first()
+    }
+
+    /**
      * The courier pool: the `AAA Certificate Services` root (§3.1 [CAP-COURIERTLS] — the
      * no-ALPN ECC chain) plus the `Apple Server Authentication CA` intermediate (the pack-v1
      * RSA chain the ALPN selects; §3.2 C19, rev 26).

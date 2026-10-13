@@ -309,7 +309,9 @@ internal class DryRunAppleEnvironment(
 
     private fun albert(headers: Map<String, String>, body: ByteArray, contentType: String): IdsHttpResponse {
         require(contentType == AlbertActivator.CONTENT_TYPE) { "activation post is not form-urlencoded (§1.2)" }
-        require(headers.isEmpty()) { "activation post carries no recorded headers (§1.2) — got ${headers.keys}" }
+        require(headers == mapOf("User-Agent" to AlbertActivator.ACTIVATION_USER_AGENT)) {
+            "activation post UA is ${headers.keys} (§1.2: rustpush get_normal_ua form)"
+        }
         val text = body.decodeToString()
         require(text.startsWith(AlbertActivator.FORM_KEY + "=")) { "activation post has more than the one form key (§1.2)" }
         val formValue = java.net.URLDecoder.decode(text.substringAfter('='), Charsets.UTF_8)
@@ -320,7 +322,13 @@ internal class DryRunAppleEnvironment(
         }
         require(outer["ActivationInfoComplete"] == true) { "ActivationInfoComplete is not true (§1.2)" }
 
-        val activationInfoXml = (outer["ActivationInfoXML"] as String).toByteArray(Charsets.UTF_8)
+        // rev 26/43: ActivationInfoXML rides plist <data> (bytes) — the string form draws the
+        // GENERIC_ERROR page (live 2026-10-02, re-confirmed 2026-10-13).
+        val activationInfoXml = when (val v = outer["ActivationInfoXML"]) {
+            is ByteArray -> v
+            is String -> v.toByteArray(Charsets.UTF_8)
+            else -> throw IllegalStateException("ActivationInfoXML is neither data nor string (§1.2)")
+        }
         val nested = Plist.parse(activationInfoXml) as Map<*, *>
         require(nested.keys == setOf(
             "ActivationRandomness", "ActivationState", "BuildVersion", "DeviceCertRequest",

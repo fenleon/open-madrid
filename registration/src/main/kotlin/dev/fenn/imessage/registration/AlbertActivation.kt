@@ -171,7 +171,10 @@ class AlbertActivator(
         val material = fairPlay.sign(activationInfoXml)
         val body = linkedMapOf<String, Any?>(
             "ActivationInfoComplete" to true,
-            "ActivationInfoXML" to activationInfoXml.toString(Charsets.UTF_8),
+            // rustpush: `activation_info_xml: activation_bytes.into()` — plist `<data>`, NOT a
+            // string (live 2026-10-02: the string form draws the `<Document>` GENERIC_ERROR page;
+            // re-confirmed 2026-10-13 by the host A/B after the port dropped the bytes form).
+            "ActivationInfoXML" to activationInfoXml,
             "FairPlayCertChain" to material.certChain,
             "FairPlaySignature" to material.signature,
         )
@@ -179,7 +182,7 @@ class AlbertActivator(
             XmlPlist.encode(body).toString(Charsets.UTF_8),
             Charsets.UTF_8,
         )
-        val response = http.post(url, emptyMap(), form.toByteArray(Charsets.UTF_8), CONTENT_TYPE)
+        val response = http.post(url, mapOf("User-Agent" to ACTIVATION_USER_AGENT), form.toByteArray(Charsets.UTF_8), CONTENT_TYPE)
         if (response.status != 200) throw IdsActivationException("POST $url → HTTP ${response.status}")
         return parseResponse(response.body)
     }
@@ -236,5 +239,9 @@ class AlbertActivator(
         const val FORM_KEY = "activation-info"
 
         const val CONTENT_TYPE = "application/x-www-form-urlencoded"
+
+        /** rustpush: `get_normal_ua("ApplePushService/4.0")` → `{item} {icloud_ua first token}` —
+         *  the UA the accepted session-15 activation carried (live 2026-10-03). */
+        const val ACTIVATION_USER_AGENT = "ApplePushService/4.0 com.apple.iCloudHelper/282"
     }
 }
