@@ -70,7 +70,6 @@ class GsaTwoFactorTest {
                 "X-Apple-I-MD-M" to "machine-id",
                 "X-Mme-Device-Id" to "device-id",
             ),
-            keychainIdentifier = ByteArray(16) { it.toByte() },
         ),
         device = device,
         userAgent = userAgent,
@@ -133,6 +132,10 @@ class GsaTwoFactorTest {
             osName = "macOS",
             osVersion = "13.6.4",
             osBuild = "22G513",
+            hardwareHeaders = mapOf(
+                "X-Apple-I-MLB" to "MLBVALUE",
+                "X-Apple-I-ROM" to "aa11bb22cc33",
+            ),
         )
         val headers = browserHeaders(device = device).toHeaders()
         val expected = mapOf(
@@ -140,15 +143,15 @@ class GsaTwoFactorTest {
             "X-Apple-I-MD-RINFO" to "17106176",
             "X-Apple-I-MD-M" to "machine-id",
             "X-Mme-Device-Id" to "device-id",
-            "X-Apple-I-MD-LU" to
-                java.security.MessageDigest.getInstance("SHA-256")
-                    .digest(ByteArray(16) { it.toByte() })
-                    .joinToString("") { "%02x".format(it) },
+            // Wire-proven 2026-10-14: the binary's /validate carries the hardware-identity
+            // headers as HTTP headers and NO MD-LU.
+            "X-Apple-I-MLB" to "MLBVALUE",
+            "X-Apple-I-ROM" to "aa11bb22cc33",
             "X-Apple-Client-App-Name" to "Messages",
             "X-Apple-I-Client-Bundle-Id" to "com.apple.MobileSMS",
             // Spec §1.5 rev-15 closure: the device-bracket form with the fixed
             // `com.apple.akd/1.0 (com.apple.akd/1.0)` inner component.
-            "X-MMe-Client-Info" to "<iMac13,1> <macOS;13.6.4;22G513> <com.apple.akd/1.0 (com.apple.akd/1.0)>",
+            "X-Mme-Client-Info" to "<iMac13,1> <macOS;13.6.4;22G513> <com.apple.akd/1.0 (com.apple.akd/1.0)>",
             "X-Apple-I-CDP-Circle-Status" to "false",
             "X-Apple-I-ICSCREC" to "true",
             // Spec §1.5 rev-15 closure: the browser UA literal — NO Safari/Version token.
@@ -165,11 +168,11 @@ class GsaTwoFactorTest {
             "X-Apple-I-TimeZone" to "UTC",
             "X-Apple-I-OT-Status" to "false",
             "X-Apple-I-TimeZone-Offset" to "0",
-            "X-MMe-Country" to "US",
+            "X-Mme-Country" to "US",
             "X-Apple-I-CDP-Status" to "false",
             "X-Apple-I-Device-Configuration-Mode" to "0",
             "Sec-Fetch-Dest" to "empty",
-            "X-Apple-AK-Context-Type" to "imessage",
+            "X-Apple-Ak-Context-Type" to "imessage",
             "X-Apple-I-CFU-State" to GsaTwoFactorHeaders.CFU_STATE,
         )
         assertEquals(expected, headers)
@@ -178,7 +181,7 @@ class GsaTwoFactorTest {
     @Test
     fun `without device slots the non-akd client-info is omitted`() {
         val headers = browserHeaders().toHeaders()
-        assertEquals(false, headers.containsKey("X-MMe-Client-Info"))
+        assertEquals(false, headers.containsKey("X-Mme-Client-Info"))
         assertEquals(GsaTwoFactorHeaders.BROWSER_USER_AGENT, headers["User-Agent"])
     }
 

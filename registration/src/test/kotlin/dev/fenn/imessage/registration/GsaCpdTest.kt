@@ -59,7 +59,6 @@ class GsaCpdTest {
 
     private fun cpd(apnsToken: String? = null, flavor: GsaFlavor = GsaFlavor.MESSAGES) = GsaCpd(
         anisette = anisette,
-        keychainIdentifier = keychainIdentifier,
         flavor = flavor,
         apnsToken = apnsToken,
     )
@@ -83,10 +82,9 @@ class GsaCpdTest {
     }
 
     @Test
-    fun `md-lu is lowercase hex sha-256 of the keychain identifier`() {
-        val expected = MessageDigest.getInstance("SHA-256").digest(keychainIdentifier)
-            .joinToString("") { "%02x".format(it) }
-        assertEquals(expected, dict()["X-Apple-I-MD-LU"])
+    fun `md-lu is absent — wire-proven (the binary carries it nowhere on GSA)`() {
+        assertNull(dict()["X-Apple-I-MD-LU"])
+        assertNull(cpd().headersFor()["X-Apple-I-MD-LU"])
     }
 
     @Test
@@ -117,7 +115,7 @@ class GsaCpdTest {
     fun `recorded booleans are pinned`() {
         val dict = dict()
         assertEquals(true, dict["X-Apple-Offer-Security-Upgrade"])
-        assertEquals(false, dict["at"])
+        assertEquals(0, dict["at"])
         assertEquals(true, dict["bootstrap"])
         assertEquals(true, dict["ckgen"])
         assertEquals(true, dict["fcd"])
@@ -135,14 +133,14 @@ class GsaCpdTest {
     }
 
     @Test
-    fun `the filtered anisette header set rides the POSTs with the derived md-lu`() {
+    fun `the filtered anisette header set rides the POSTs`() {
         val headers = cpd().headersFor()
         assertEquals("an-otp", headers["X-Apple-I-MD"])
         assertEquals("a-machine-id", headers["X-Apple-I-MD-M"])
         assertEquals("17106176", headers["X-Apple-I-MD-RINFO"])
         assertEquals("1234ABCD-5678-90EF-1234-ABCD567890EF", headers["X-Mme-Device-Id"])
-        assertEquals(dict()["X-Apple-I-MD-LU"], headers["X-Apple-I-MD-LU"])
-        // The filtered set: client-time is a cpd key only, hardware headers appear on neither.
+        // The filtered set: client-time is a cpd key only; MD-LU and the hardware
+        // headers appear on neither (wire-proven 2026-10-14).
         assertNull(headers["X-Apple-I-Client-Time"])
         assertNull(headers["X-Apple-I-MLB"])
     }
@@ -158,12 +156,13 @@ class GsaCpdTest {
         ).toHeaders()
         assertEquals(
             mapOf(
-                "X-MMe-Client-Info" to "<iMac13,1> <macOS;13.6.4;22G513> <com.apple.AuthKit/1 (com.apple.akd/1.0)>",
+                "X-Mme-Client-Info" to "<iMac13,1> <macOS;13.6.4;22G513> <com.apple.AuthKit/1 (com.apple.akd/1.0)>",
                 "User-Agent" to "akd/1.0 CFNetwork/1494.0.7 Darwin/23.4.0",
-                "X-Apple-AK-Context-Type" to "imessage",
+                "X-Apple-Ak-Context-Type" to "imessage",
                 "X-Apple-Client-App-Name" to "Messages",
                 "X-Apple-I-Client-Bundle-Id" to "com.apple.MobileSMS",
-                // The vendored reference's get_gsservice_headers carries it (2026-10-14 source diff).
+                // Wire-proven against the trapped binary's GSA init (2026-10-14).
+                "Accept" to "*/*",
                 "Accept-Language" to "en-US,en;q=0.9",
             ),
             headers,
@@ -175,7 +174,7 @@ class GsaCpdTest {
             osVersion = "12.5.5",
             osBuild = "16H62",
         ).toHeaders()
-        assertEquals("icloud", icloud["X-Apple-AK-Context-Type"])
+        assertEquals("icloud", icloud["X-Apple-Ak-Context-Type"])
         assertEquals("icloud", icloud["X-Apple-Client-App-Name"])
         assertEquals("com.apple.systempreferences.AppleIDSettings", icloud["X-Apple-I-Client-Bundle-Id"])
     }
@@ -185,7 +184,6 @@ class GsaCpdTest {
         val expected = setOf(
             "X-Apple-I-Client-Time",
             "X-Apple-I-MD",
-            "X-Apple-I-MD-LU",
             "X-Apple-I-MD-M",
             "X-Apple-I-MD-RINFO",
             "X-Mme-Device-Id",

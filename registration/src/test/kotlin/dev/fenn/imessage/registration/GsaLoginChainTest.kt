@@ -63,7 +63,6 @@ class GsaLoginChainTest {
             "X-Apple-I-MD-M" to "machine-id",
             "X-Mme-Device-Id" to "device-id",
         ),
-        keychainIdentifier = ByteArray(16) { it.toByte() },
     )
 
     private fun chain(

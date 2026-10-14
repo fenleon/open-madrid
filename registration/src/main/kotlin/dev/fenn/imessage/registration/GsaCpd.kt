@@ -51,8 +51,9 @@ enum class GsaFlavor(
 /**
  * The GSA `cpd` (client-provided-data) dictionary of spec §1.5 — a dict inside the request
  * body carrying the anisette values as KEYS plus the fixed-value set. Anisette values come
- * from chunk A's [AnisetteHeaderProvider]; the `X-Apple-I-MD-LU` value is derived here from
- * the keychain identifier per §1.1 (lowercase hex SHA-256 over the same 16 bytes).
+ * from chunk A's [AnisetteHeaderProvider]. Wire-pinned against the trapped binary's GSA
+ * init (2026-10-14): NO `X-Apple-I-MD-LU` anywhere (headers or cpd), the hardware-identity
+ * headers chain LAST, and `ptkn` rides every login once the app holds a push token.
  *
  * `capp`/`cbid`/`svct` ride the recorded per-flavor values ([GsaFlavor], C59); `ptkn` (APNs
  * token) is optional.
@@ -63,15 +64,12 @@ enum class GsaFlavor(
  * `X-Apple-Security-Upgrade-Context` = `com.apple.authkit.generic`, `cou` = `US`,
  * `loc` = `en_US`, and the booleans `X-Apple-Offer-Security-Upgrade`=true, `bootstrap`=true,
  * `ckgen`=true, `fcd`=true, `icdrsDisabled`=false, `icscrec`=true, `pbe`=false,
- * `prkgen`=true, `webAccessEnabled`=false, `at`=false (the recorded wire value is the plist
- * boolean false from a genuine Mac capture; the vendored Rust source writes Integer(0) —
- * both live-accepted, the recording wins).
+ * `prkgen`=true, `webAccessEnabled`=false, `at`= the plist INTEGER 0 (wire-proven; the
+ * earlier boolean-false reading was also live-accepted).
  */
 class GsaCpd(
     /** The §1.1 anisette headers (from [AnisetteHeaderProvider.headers]). */
     private val anisette: Map<String, String>,
-    /** The 16-byte keychain identifier — feeds the `X-Apple-I-MD-LU` derivation (§1.1). */
-    private val keychainIdentifier: ByteArray,
     /** The recorded per-flavor `capp`/`cbid`/`svct` values (§1.5, C59). */
     val flavor: GsaFlavor = GsaFlavor.MESSAGES,
     /** Optional APNs token (`ptkn`). */
@@ -90,7 +88,6 @@ class GsaCpd(
     fun dictFor(requestUuid: String): Map<String, Any?> {
         val dict = LinkedHashMap<String, Any?>()
         ANISETTE_KEYS.forEach { key -> anisette[key]?.let { dict[key] = it } }
-        dict["X-Apple-I-MD-LU"] = mdLu()
         dict["X-Apple-I-Device-Configuration-Mode"] = "0"
         dict[REQUEST_UUID_KEY] = requestUuid
         dict["X-Apple-Requested-Partition"] = "0"
@@ -101,9 +98,8 @@ class GsaCpd(
         dict["loc"] = "en_US"
         dict["svct"] = flavor.akContextType
         dict["X-Apple-Offer-Security-Upgrade"] = true
-        // The recorded wire value is the boolean false (genuine Mac capture); the vendored
-        // Rust source writes Integer(0) — both live-accepted, keep the recording (2026-10-14).
-        dict["at"] = false
+        // Wire-proven 2026-10-14 (trapped GSA init): the binary sends the plist INTEGER 0.
+        dict["at"] = 0
         dict["bootstrap"] = true
         dict["ckgen"] = true
         dict["fcd"] = true
@@ -117,23 +113,18 @@ class GsaCpd(
         return dict
     }
 
-    /** §1.1: lowercase hex (no dashes) SHA-256 over the 16-byte keychain identifier. */
-    private fun mdLu(): String = java.security.MessageDigest.getInstance("SHA-256")
-        .digest(keychainIdentifier)
-        .joinToString("") { "%02x".format(it) }
-
     /**
      * The §1.5 header set that rides the GSA POSTs: the base anisette headers filtered to
-     * `X-Apple-I-MD-LU`, `X-Apple-I-MD-RINFO`, `X-Apple-I-MD-M`, `X-Apple-I-MD`,
-     * `X-Mme-Device-Id` — the same values the cpd carries, as headers. The akd-variant
-     * headers ([GsaHeaderConfig]) are appended by the caller.
+     * `X-Apple-I-MD-RINFO`, `X-Apple-I-MD-M`, `X-Apple-I-MD`, `X-Mme-Device-Id` — the same
+     * values the cpd carries, as headers. Wire-proven 2026-10-14: the binary's GSA POSTs
+     * carry NO `X-Apple-I-MD-LU` (neither headers nor cpd). The akd-variant headers
+     * ([GsaHeaderConfig]) are appended by the caller.
      */
     fun headersFor(): Map<String, String> = buildMap {
         anisette[AnisetteHeaderProvider.MACHINE_OTP]?.let { put(AnisetteHeaderProvider.MACHINE_OTP, it) }
         anisette[AnisetteHeaderProvider.RINFO]?.let { put(AnisetteHeaderProvider.RINFO, it) }
         anisette[AnisetteHeaderProvider.MACHINE_ID]?.let { put(AnisetteHeaderProvider.MACHINE_ID, it) }
         anisette[AnisetteHeaderProvider.DEVICE_ID]?.let { put(AnisetteHeaderProvider.DEVICE_ID, it) }
-        put("X-Apple-I-MD-LU", mdLu())
     }
 
     companion object {
@@ -195,18 +186,19 @@ data class GsaHeaderConfig(
         get() = "<$hardwareModel> <${osName};${osVersion};${osBuild}> <$AOSKIT_CLIENT_INFO>"
 
     /**
-     * The GSA login POST header set — the vendored reference's `get_gsservice_headers`
-     * (icloud-auth anisette.rs, 2026-10-14 source diff): the akd `User-Agent`, the akd
-     * `X-MMe-Client-Info`, the flavor's context/bundle headers and `Accept-Language`. The
-     * hardware-identity headers are NOT here — the reference carries them inside the cpd
-     * dict only ([GsaCpd.hardwareHeaders]).
+     * The GSA login POST header set — wire-proven against the trapped binary's GSA init
+     * (2026-10-14): the akd `X-Mme-Client-Info` (lowercase e — the binary's form),
+     * akd `User-Agent`, the flavor's context/bundle headers (`X-Apple-Ak-Context-Type`,
+     * lowercase k), `Accept: any` and `Accept-Language`. No hardware headers and no
+     * MD-LU (both live inside the cpd / nowhere).
      */
     fun toHeaders(): Map<String, String> = linkedMapOf(
-        "X-MMe-Client-Info" to clientInfo,
+        "X-Mme-Client-Info" to clientInfo,
         "User-Agent" to AKD_USER_AGENT,
-        "X-Apple-AK-Context-Type" to flavor.akContextType,
+        "X-Apple-Ak-Context-Type" to flavor.akContextType,
         "X-Apple-Client-App-Name" to flavor.clientAppName,
         "X-Apple-I-Client-Bundle-Id" to flavor.clientBundleId,
+        "Accept" to "*/*",
         "Accept-Language" to "en-US,en;q=0.9",
     )
 

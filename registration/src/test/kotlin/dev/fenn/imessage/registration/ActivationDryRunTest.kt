@@ -222,7 +222,7 @@ class ActivationDryRunTest {
             osVersion = export.macOsProductVersion!!,
             osBuild = identifiers.osBuildNumber!!,
         )
-        val cpd = GsaCpd(anisette = anisette, keychainIdentifier = ByteArray(16) { (it + 1).toByte() })
+        val cpd = GsaCpd(anisette = anisette)
         val chain = GsaLoginChain(
             http = env,
             cpd = { cpd },
@@ -456,10 +456,10 @@ class ActivationDryRunTest {
         )
         val chain = GsaLoginChain(
             http = env,
-            cpd = { GsaCpd(anisette = anisetteHeaders(), keychainIdentifier = ByteArray(16)) },
+            cpd = { GsaCpd(anisette = anisetteHeaders()) },
             twoFactorHeaders = {
                 GsaTwoFactorHeaders.of(
-                    GsaCpd(anisette = anisetteHeaders(), keychainIdentifier = ByteArray(16)),
+                    GsaCpd(anisette = anisetteHeaders()),
                     device = deviceConfig,
                 )
             },

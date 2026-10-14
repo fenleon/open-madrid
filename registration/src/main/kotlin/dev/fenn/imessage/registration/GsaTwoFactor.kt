@@ -96,7 +96,10 @@ class GsaTwoFactorHeaders(
         putAll(anisette)
         put("X-Apple-Client-App-Name", flavor.clientAppName)
         put("X-Apple-I-Client-Bundle-Id", flavor.clientBundleId)
-        clientInfo?.let { put("X-MMe-Client-Info", it) }
+        clientInfo?.let { put("X-Mme-Client-Info", it) }
+        // Wire-proven 2026-10-14 (trapped /validate): the hardware-identity headers ride
+        // the 2FA browser-style set as HTTP headers (unlike the GSA login POSTs).
+        device?.hardwareHeaders?.forEach { (key, value) -> put(key, value) }
         put("X-Apple-I-CDP-Circle-Status", "false")
         put("X-Apple-I-ICSCREC", "true")
         put("User-Agent", userAgent)
@@ -111,11 +114,11 @@ class GsaTwoFactorHeaders(
         put("X-Apple-I-TimeZone", "UTC")
         put("X-Apple-I-OT-Status", "false")
         put("X-Apple-I-TimeZone-Offset", "0")
-        put("X-MMe-Country", "US")
+        put("X-Mme-Country", "US")
         put("X-Apple-I-CDP-Status", "false")
         put("X-Apple-I-Device-Configuration-Mode", "0")
         put("Sec-Fetch-Dest", "empty")
-        put("X-Apple-AK-Context-Type", flavor.akContextType)
+        put("X-Apple-Ak-Context-Type", flavor.akContextType)
         put("X-Apple-I-CFU-State", CFU_STATE)
     }
 
