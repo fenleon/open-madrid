@@ -157,6 +157,31 @@ class GsaDelegateLoginClient(
         // 401 UNAUTHORIZED, so the server reads Basic even on the V1 shape). The V2 wrapper
         // is kept for the recorded v2 endpoint (§1.5 C59).
         val prefpane = endpoint == PREFPANE_ENDPOINT
+        // The captured prefpane request (vendored client, live 2026-10-14, /tmp/ob-req-002.bin)
+        // carries NO X-Apple-I-MD-LU and DOES carry X-Apple-Locale/X-Apple-I-Timezone — the
+        // inverse of the GSA cpd header set (headersFor() adds MD-LU, drops both). MD-LU here is
+        // a machine-identity header (real macOS sends its AuthKit local-user UUID) and the
+        // endpoint's verdict is ICLOUD_INVALID_DEVICE_TOKEN — the fabricated sha256(keychain-id)
+        // form is the prime suspect for the 400. GSA keeps its recorded set (rev 15).
+        val anisette = if (prefpane) {
+            request.anisette
+                .filterKeys { !it.equals("X-Apple-I-MD-LU", true) }
+                // The accepted prefpane request's exact wire casing (live capture 2026-10-14,
+                // captures/c56k/mint-repro/ob-req-002.bin): real AuthKit sends mixed-case
+                // Md/Adsid/Timezone, while the §1.1-recorded GSA names carry all-caps
+                // MD/ADSID/TimeZone — and setup.icloud.com answers ICLOUD_INVALID_DEVICE_TOKEN
+                // with the caps forms at full value parity (2026-10-14 byte diff), so the
+                // endpoint is treated as case-sensitive. GSA keeps its recorded (working) set.
+                .mapKeys { (k, _) -> PREFPANE_HEADER_CASE[k.lowercase()] ?: k } +
+                mapOf(
+                    "X-Apple-Locale" to "en_US",
+                    "X-Apple-I-Timezone" to "UTC",
+                    // fresh per request, the get_headers Z form (capture 2026-10-14)
+                    "X-Apple-I-Client-Time" to iso8601Z(System.currentTimeMillis()),
+                )
+        } else {
+            request.anisette
+        }
         val body = if (prefpane) {
             linkedMapOf<String, Any?>(
                 "apple-id" to request.username,
@@ -179,11 +204,16 @@ class GsaDelegateLoginClient(
             )
         }
         val headers = buildMap {
-            putAll(request.anisette)
+            putAll(anisette)
             put("Authorization", "Basic $basic")
             put(HEADER_NAS_QUALIFY, Base64.getEncoder().encodeToString(request.validationData))
-            put(HEADER_ADSID, request.adsid)
-            put(HEADER_CLIENT_INFO, request.clientInfo)
+            // Mixed case on the prefpane path (see PREFPANE_HEADER_CASE): the accepted
+            // request carries X-Apple-Adsid, the recorded GSA name is all-caps ADSID.
+            put(if (prefpane) "X-Apple-Adsid" else HEADER_ADSID, request.adsid)
+            // The captured prefpane request (vendored client, live 2026-10-14, /tmp/ob-req-002.bin)
+            // carries the AuthKit/MobileSMS inner component here, not the AOSKit form the v2
+            // endpoint was recorded with.
+            put(HEADER_CLIENT_INFO, if (prefpane) PREFPANE_CLIENT_INFO else request.clientInfo)
             put("User-Agent", SIGNIN_USER_AGENT)
         }
         val encoded = XmlPlist.encode(body)
@@ -199,7 +229,10 @@ class GsaDelegateLoginClient(
                 )
             }
         }
-        val response = http.post(endpoint, headers, encoded, CONTENT_TYPE)
+        // No Content-Type on the prefpane path: the captured accepted request sends the XML
+        // body bare (reqwest default), BridgeHttp maps "" to no header. The recorded v2
+        // endpoint keeps its content type.
+        val response = http.post(endpoint, headers, encoded, if (prefpane) "" else CONTENT_TYPE)
         if (response.status != 200) {
             throw GsaLoginException(
                 "iCloud sign-in POST $endpoint → HTTP ${response.status}${errorDetail(response.body)}",
@@ -273,11 +306,30 @@ class GsaDelegateLoginClient(
         const val SIGNIN_ENDPOINT = "https://setup.icloud.com/setup/signin/v2/login"
 
         /**
-         * The reference client's delegate sign-in endpoint (.so strings, 2026-10-13) — same
-         * header/body family as [SIGNIN_ENDPOINT]; the endpoint where its delegate sign-ins
-         * succeed live (the recorded v2 form answers 409 ICLOUD_UNSUPPORTED_DEVICE).
+         * The reference client's delegate sign-in endpoint — captured LIVE 2026-10-14 from the
+         * vendored client under gdb (`/tmp/ob-req-002.bin`): the wire path is
+         * `/setup/prefpane/loginDelegates`, NOT `/setup/prefpane/login` (the `.so`'s rodata
+         * string table concatenation `…/login` ‖ `Delegates…` misread rev 45 — `login` is the
+         * plain machine sign-in whose failure dialog is exactly the 400
+         * `ICLOUD_INVALID_DEVICE_TOKEN` every on-device attempt answered). The successful
+         * sign-in CREATES the account's device record (live 2026-10-14: after the user removed
+         * the record, the reference's next sign-in re-added it — no 2FA needed, stored-hash
+         * re-auth).
          */
-        const val PREFPANE_ENDPOINT = "https://setup.icloud.com/setup/prefpane/login"
+        const val PREFPANE_ENDPOINT = "https://setup.icloud.com/setup/prefpane/loginDelegates"
+
+        /** The accepted prefpane request's exact anisette wire casing (live 2026-10-14,
+         * ob-req-002.bin) — see the mapKeys call in [signIn]. */
+        private val PREFPANE_HEADER_CASE = mapOf(
+            "x-apple-i-md" to "X-Apple-I-Md",
+            "x-apple-i-md-m" to "X-Apple-I-Md-M",
+            "x-apple-i-md-rinfo" to "X-Apple-I-Md-Rinfo",
+            "x-apple-i-timezone" to "X-Apple-I-Timezone",
+        )
+
+        /** The captured prefpane `X-Mme-Client-Info` inner component (live 2026-10-14). */
+        const val PREFPANE_CLIENT_INFO =
+            "<MacBookPro18,3> <macOS;26.6.2;25G83> <com.apple.AuthKit/1 (com.apple.MobileSMS/1262.500.151.1.2)>"
         const val CONTENT_TYPE = "application/x-apple-plist"
         const val PROTOCOL_VERSION = "1.0"
         const val IDS_DELEGATE_BUNDLE_ID = "com.apple.private.ids"

@@ -155,6 +155,13 @@ data class GsaHeaderConfig(
     val osVersion: String,
     /** The `<OSbuild>` slot (§1.5, device-dependent). */
     val osBuild: String,
+    /**
+     * The Mac hardware-identity headers (§1.1) — `X-Apple-I-SRL-NO` / `X-Apple-I-MLB` /
+     * `X-Apple-I-ROM` — riding every GSA call. The vendored reference chains these into
+     * every GSA request (icloud-auth anisette.rs `hardware_headers`): they are what anchors
+     * the real machine to the account session/device record. Empty = the headers are absent.
+     */
+    val hardwareHeaders: Map<String, String> = emptyMap(),
 ) {
 
     /** The akd-form template: `<HardwareModel> <OSname;OSversion;OSbuild> <com.apple.AuthKit/1 (com.apple.akd/1.0)>`. */
@@ -181,7 +188,7 @@ data class GsaHeaderConfig(
         "X-Apple-AK-Context-Type" to flavor.akContextType,
         "X-Apple-Client-App-Name" to flavor.clientAppName,
         "X-Apple-I-Client-Bundle-Id" to flavor.clientBundleId,
-    )
+    ) + hardwareHeaders
 
     companion object {
         /** The recorded akd `User-Agent` literal (§1.5, C59). */

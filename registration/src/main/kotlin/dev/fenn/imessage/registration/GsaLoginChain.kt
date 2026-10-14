@@ -148,10 +148,45 @@ class GsaLoginChain(
 
     private val loginClient = GsaLoginClient(http, logEvent = logEvent)
     private val delegateClient = GsaDelegateLoginClient(http, endpoint = delegateEndpoint, logEvent = logEvent)
+    private val postdataClient = GsaPostdataClient(http, logEvent = logEvent)
 
     /** §1.5: the filtered anisette header set + the akd-variant headers, one per login. */
     private suspend fun gsaHeaders(): Map<String, String> =
         headerConfig?.let { cpd().headersFor() + it.toHeaders() } ?: cpd().headersFor()
+
+    /**
+     * The §1.5 postdata liveness event — the account device-record registration the reference
+     * client fires before the delegate sign-in (vendored `do_login`, source-verified
+     * 2026-10-14). This is what makes the device TRUSTED on the account (the "Apple Device"
+     * record vs an unverified model-name record) — the sequence step our flow always skipped.
+     * The endpoint requires a live APNs push token (live 2026-10-14 without one: 401,
+     * ec=-800012 "Push token is invalid"), so the caller fires it once the courier connect
+     * has minted one, immediately before the delegate sign-in. Skipped when the spd lacks
+     * the adsid/idms.hb pair (a pre-2FA login carries neither); failures are logged, never
+     * fatal — the sign-in decides its own verdict.
+     */
+    suspend fun postdataLiveness(spd: GsaSpd?, pushTokenHex: String? = null) {
+        val adsid = spd?.adsid
+        val hb = spd?.tokens?.get(GsaSpd.SERVICE_IDMS_HB)?.token
+        if (adsid == null || hb == null) {
+            logEvent("gsa: postdata skipped (no adsid/hb token in the spd)")
+            return
+        }
+        try {
+            postdataClient.post(
+                GsaPostdataRequest(
+                    adsid = adsid,
+                    hbToken = hb,
+                    anisette = cpd().headersFor(),
+                    clientInfo = headerConfig?.clientInfo ?: GsaHeaderConfig.AOSKIT_CLIENT_INFO,
+                    hardwareHeaders = headerConfig?.hardwareHeaders ?: emptyMap(),
+                    pushToken = pushTokenHex,
+                ),
+            )
+        } catch (e: Exception) {
+            logEvent("gsa: postdata failed: ${e.message}")
+        }
+    }
 
     /** Full login with the raw password; the hash is computed here and never logged. */
     suspend fun login(username: String, password: String): GsaLoginResult =

@@ -272,6 +272,9 @@ class ActivationDryRunTest {
 
         // The delegate sign-in consumes the step-3 blob — wire it for the server-side assertion.
         env.expectedValidationBlob = validation.blob
+        // §1.5 postdata liveness BEFORE the sign-in (vendored do_login order), fired by the
+        // register flow once the APNs token exists — here with the spd's idms.hb token.
+        chain.postdataLiveness(authenticated.spd)
         val credentials = chain.idsDelegateCredentials(
             username = username,
             pet = authenticated.pet!!.token,
@@ -285,21 +288,13 @@ class ActivationDryRunTest {
         assertEquals(env.authToken, credentials.authToken)
         assertEquals(env.profileId, credentials.profileId)
 
-        // The GSA postdata liveness event fires AFTER the delegate sign-in (rev 26 order —
-        // sign-in first, postdata after; the sign-in mints its own Nas-Qualify blob), with a
+        // The GSA postdata liveness event fired BEFORE the delegate sign-in (the corrected
+        // vendored do_login order — the earlier "sign-in first" note was wrong), with a
         // FRESH anisette set and the spd's com.apple.gs.idms.hb token.
-        GsaPostdataClient(env).post(
-            GsaPostdataRequest(
-                adsid = env.adsid,
-                hbToken = authenticated.spd!!.tokens[GsaSpd.SERVICE_IDMS_HB]!!.token,
-                anisette = anisette,
-                clientInfo = deviceConfig.clientInfo,
-            ),
-        )
         assertEquals(1, env.postdataCount)
         val signInIndex = env.callUrls().indexOfFirst { it == GsaDelegateLoginClient.SIGNIN_ENDPOINT }
         val postdataIndex = env.callUrls().indexOfFirst { it == GsaPostdataClient.ENDPOINT }
-        assertTrue(signInIndex in 0 until postdataIndex, "postdata must come after the delegate sign-in (rev 26)")
+        assertTrue(postdataIndex in 0 until signInIndex, "postdata must come before the delegate sign-in (vendored do_login order, source-verified 2026-10-14)")
 
         store.updateAccount { account ->
             account.copy(

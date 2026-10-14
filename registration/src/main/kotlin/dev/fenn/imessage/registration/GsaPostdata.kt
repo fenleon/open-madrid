@@ -31,15 +31,19 @@ data class GsaPostdataRequest(
     val anisette: Map<String, String>,
     /** The akd-form `X-Mme-Client-Info` ([GsaHeaderConfig.clientInfo]). */
     val clientInfo: String,
+    /** The Mac hardware-identity headers (SRL-NO/MLB/ROM) — the vendored chains them onto
+     * the postdata header set too (`hardware_headers`, icloud-auth anisette.rs). */
+    val hardwareHeaders: Map<String, String> = emptyMap(),
     /** The APNs push token hex — optional; absent on a first login (registration follows it). */
     val pushToken: String? = null,
 )
 
 /**
- * The GSA postdata client: one [post] per login, AFTER the delegate sign-in (rev 26: the
- * reference program order is sign-in first, postdata after — the delegate sign-in mints its
- * own Nas-Qualify blob at sign-in time, and the liveness event rides the post-sign-in
- * credentials; the earlier reverse-order note was wrong).
+ * The GSA postdata client: one [post] per login, BEFORE the delegate sign-in (vendored
+ * `do_login` parity, source-verified 2026-10-14: `update_postdata` runs first, then
+ * `login_apple_delegates` — the liveness event creates the account device record the
+ * prefpane sign-in's "verify the identity of this Mac" check consumes; the docstring's
+ * earlier "sign-in first" claim was wrong).
  */
 class GsaPostdataClient(
     private val http: IdsHttp,
@@ -54,6 +58,7 @@ class GsaPostdataClient(
         logEvent("gsa: postdata liveness (services=${SERVICES.joinToString(",")})")
         val headers = buildMap {
             putAll(filteredAnisette(request.anisette))
+            putAll(request.hardwareHeaders)
             put("Accept", "*/*")
             put("Accept-Language", "en-US,en;q=0.9")
             put("User-Agent", GsaHeaderConfig.AKD_USER_AGENT)
