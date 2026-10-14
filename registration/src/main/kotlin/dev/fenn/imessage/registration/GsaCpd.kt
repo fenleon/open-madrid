@@ -63,8 +63,9 @@ enum class GsaFlavor(
  * `X-Apple-Security-Upgrade-Context` = `com.apple.authkit.generic`, `cou` = `US`,
  * `loc` = `en_US`, and the booleans `X-Apple-Offer-Security-Upgrade`=true, `bootstrap`=true,
  * `ckgen`=true, `fcd`=true, `icdrsDisabled`=false, `icscrec`=true, `pbe`=false,
- * `prkgen`=true, `webAccessEnabled`=false, `at`=0 (the spec lists `at` among the booleans
- * but records its value as `0`; encoded as the plist boolean false).
+ * `prkgen`=true, `webAccessEnabled`=false, `at`=false (the recorded wire value is the plist
+ * boolean false from a genuine Mac capture; the vendored Rust source writes Integer(0) —
+ * both live-accepted, the recording wins).
  */
 class GsaCpd(
     /** The §1.1 anisette headers (from [AnisetteHeaderProvider.headers]). */
@@ -75,6 +76,14 @@ class GsaCpd(
     val flavor: GsaFlavor = GsaFlavor.MESSAGES,
     /** Optional APNs token (`ptkn`). */
     private val apnsToken: String? = null,
+    /**
+     * The Mac hardware-identity headers (§1.1) — chained into the cpd dict like the
+     * vendored reference's cpd construction (icloud-auth anisette.rs `get_cpd_data` chains
+     * `client_info.hardware_headers` LAST). This is the login-body machine anchor: the
+     * gsservice HTTP header set does NOT carry them (2026-10-14 source diff — the earlier
+     * reading had them as login HTTP headers and missing from the cpd, inverted).
+     */
+    val hardwareHeaders: Map<String, String> = emptyMap(),
 ) {
 
     /** The cpd dict for one login; [requestUuid] is the uppercase UUIDv4 shared by both steps. */
@@ -92,6 +101,8 @@ class GsaCpd(
         dict["loc"] = "en_US"
         dict["svct"] = flavor.akContextType
         dict["X-Apple-Offer-Security-Upgrade"] = true
+        // The recorded wire value is the boolean false (genuine Mac capture); the vendored
+        // Rust source writes Integer(0) — both live-accepted, keep the recording (2026-10-14).
         dict["at"] = false
         dict["bootstrap"] = true
         dict["ckgen"] = true
@@ -102,6 +113,7 @@ class GsaCpd(
         dict["prkgen"] = true
         dict["webAccessEnabled"] = false
         apnsToken?.let { dict["ptkn"] = it }
+        hardwareHeaders.forEach { (key, value) -> dict[key] = value }
         return dict
     }
 
@@ -182,13 +194,21 @@ data class GsaHeaderConfig(
     val signInClientInfo: String
         get() = "<$hardwareModel> <${osName};${osVersion};${osBuild}> <$AOSKIT_CLIENT_INFO>"
 
+    /**
+     * The GSA login POST header set — the vendored reference's `get_gsservice_headers`
+     * (icloud-auth anisette.rs, 2026-10-14 source diff): the akd `User-Agent`, the akd
+     * `X-MMe-Client-Info`, the flavor's context/bundle headers and `Accept-Language`. The
+     * hardware-identity headers are NOT here — the reference carries them inside the cpd
+     * dict only ([GsaCpd.hardwareHeaders]).
+     */
     fun toHeaders(): Map<String, String> = linkedMapOf(
         "X-MMe-Client-Info" to clientInfo,
         "User-Agent" to AKD_USER_AGENT,
         "X-Apple-AK-Context-Type" to flavor.akContextType,
         "X-Apple-Client-App-Name" to flavor.clientAppName,
         "X-Apple-I-Client-Bundle-Id" to flavor.clientBundleId,
-    ) + hardwareHeaders
+        "Accept-Language" to "en-US,en;q=0.9",
+    )
 
     companion object {
         /** The recorded akd `User-Agent` literal (§1.5, C59). */

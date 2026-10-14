@@ -125,7 +125,10 @@ data class ProvisionedAnisette(
     val mid: ByteArray,
     val metadata: ByteArray,
     val rinfo: String,
-    /** 0 = Mac, 1 = IOS (ClearAdiOtp's flavor convention; the reference's ProvisionedFlavor). */
+    /** 0 = IOS-era provisioning, 1 = Mac (ClearAdiOtp's flavor convention — FLAVOR_MAC=1,
+     *  FLAVOR_IOS=0; the pre-2026-10-14 doc had this inverted and caused the failed
+     *  vendored-state swap: a Mac MID written with flavor 0 dispatches the wrong OTP
+     *  cipher → GSA ec=-22421). */
     val flavor: Int,
 ) {
     fun toJson(): String = buildJsonObject {

@@ -163,6 +163,8 @@ class GsaCpdTest {
                 "X-Apple-AK-Context-Type" to "imessage",
                 "X-Apple-Client-App-Name" to "Messages",
                 "X-Apple-I-Client-Bundle-Id" to "com.apple.MobileSMS",
+                // The vendored reference's get_gsservice_headers carries it (2026-10-14 source diff).
+                "Accept-Language" to "en-US,en;q=0.9",
             ),
             headers,
         )
