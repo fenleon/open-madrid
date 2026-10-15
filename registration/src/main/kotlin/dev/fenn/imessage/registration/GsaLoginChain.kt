@@ -171,6 +171,11 @@ class GsaLoginChain(
      * has minted one, immediately before the delegate sign-in. Skipped when the spd lacks
      * the adsid/idms.hb pair (a pre-2FA login carries neither); failures are logged, never
      * fatal — the sign-in decides its own verdict.
+     *
+     * The anisette presented is the LOGIN RUN's set ([lastLoginAnisette]) — the accepted wire
+     * reuses ONE set session-wide (2026-10-15 decode), so the device record is trusted under
+     * the same OTP window the PET is issued under. Falls back to a fresh mint only when no
+     * login run has happened (e.g. direct test calls).
      */
     suspend fun postdataLiveness(spd: GsaSpd?, pushTokenHex: String? = null) {
         val adsid = spd?.adsid
@@ -184,7 +189,7 @@ class GsaLoginChain(
                 GsaPostdataRequest(
                     adsid = adsid,
                     hbToken = hb,
-                    anisette = cpd().headersFor(),
+                    anisette = lastLoginAnisette.ifEmpty { cpd().headersFor() },
                     clientInfo = headerConfig?.clientInfo ?: GsaHeaderConfig.AOSKIT_CLIENT_INFO,
                     hardwareHeaders = headerConfig?.hardwareHeaders ?: emptyMap(),
                     pushToken = pushTokenHex,
