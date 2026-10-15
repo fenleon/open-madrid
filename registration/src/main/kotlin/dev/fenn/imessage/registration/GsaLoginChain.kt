@@ -150,9 +150,16 @@ class GsaLoginChain(
     private val delegateClient = GsaDelegateLoginClient(http, endpoint = delegateEndpoint, logEvent = logEvent)
     private val postdataClient = GsaPostdataClient(http, logEvent = logEvent)
 
-    /** §1.5: the filtered anisette header set + the akd-variant headers, one per login. */
-    private suspend fun gsaHeaders(): Map<String, String> =
-        headerConfig?.let { cpd().headersFor() + it.toHeaders() } ?: cpd().headersFor()
+    /**
+     * The anisette header set of the last completed login run — the same set its GSA hops
+     * presented, `X-Apple-I-Client-Time` included (frozen at the run's mint). The delegate
+     * sign-in must present THIS set: the accepted wire (trapped binary, 2026-10-15) reuses
+     * ONE minted set across the entire session — GSA init/complete, 2FA validate, postdata,
+     * the prefpane POSTs — so the PET is paired with the OTP window it was issued under.
+     * Empty until the first login run.
+     */
+    var lastLoginAnisette: Map<String, String> = emptyMap()
+        private set
 
     /**
      * The §1.5 postdata liveness event — the account device-record registration the reference
@@ -200,8 +207,16 @@ class GsaLoginChain(
      */
     suspend fun loginWithPasswordHash(username: String, passwordHash: ByteArray): GsaLoginResult {
         val requestUuid = newRequestUuid()
-        val cpdDict = cpd().dictFor(requestUuid)
-        val gsaHeaders = gsaHeaders()
+        // ONE anisette mint per login run: the cpd dict and the POST headers carry the same
+        // set (the accepted wire reuses one set across the whole session, 2026-10-15), and
+        // the run's set is what the delegate sign-in must present (lastLoginAnisette).
+        val cpdSet = cpd()
+        val anisetteHeaders = cpdSet.headersFor()
+        lastLoginAnisette = cpdSet.clientTime()
+            ?.let { anisetteHeaders + (AnisetteHeaderProvider.CLIENT_TIME to it) }
+            ?: anisetteHeaders
+        val cpdDict = cpdSet.dictFor(requestUuid)
+        val gsaHeaders = headerConfig?.let { anisetteHeaders + it.toHeaders() } ?: anisetteHeaders
         val srp = GsaSrpClient(random)
         val a2k = srp.begin()
         val init = loginClient.init(
@@ -342,12 +357,16 @@ class GsaLoginChain(
      * the §1.1 blob (the chunk-C exchange mints it — caller-supplied here). [timezone] defaults
      * to the recorded value (§1.5 C59); [clientInfo] defaults to the recorded bracketed AOSKit
      * form when the device config is wired ([GsaHeaderConfig.signInClientInfo]), falling back to
-     * the bare recorded AOSKit inner component. [anisette] must be FRESHLY minted for this
-     * call — the one-time OTP headers spent on the GSA hops are refused here (observed live;
-     * the reference client mints per request). [validationData] must be a FRESH mint per
-     * sign-in (minted at sign-in time, never a login-start blob carried across the 2FA wait) —
-     * a consumed blob answers HTTP 409, the stamp REPLAY refusal, not a blob rejection
-     * (rev 26, §1.4's replay guard).
+     * the bare recorded AOSKit inner component. [anisette] is the LOGIN RUN's set
+     * ([lastLoginAnisette] — the same set the GSA hops of the PET's session presented,
+     * Client-Time frozen at that mint): the accepted wire (trapped binary, 2026-10-15)
+     * reuses ONE anisette set across the whole session, so the prefpane POST pairs the
+     * PET with the OTP window it was issued under. The earlier "freshly minted here"
+     * reading (rev 25/26) predates the loginDelegates endpoint fix and is confounded
+     * with the stamp replay-guard refusals of that era. [validationData] must be a FRESH
+     * mint per sign-in (minted at sign-in time, never a login-start blob carried across
+     * the 2FA wait) — a consumed blob answers HTTP 409, the stamp REPLAY refusal, not a
+     * blob rejection (rev 26, §1.4's replay guard).
      */
     suspend fun idsDelegateCredentials(
         username: String,

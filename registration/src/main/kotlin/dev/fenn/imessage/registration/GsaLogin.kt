@@ -207,6 +207,8 @@ class GsaLoginClient(
             "A2k" to a2k,
             "cpd" to cpd,
             "o" to OPERATION_INIT,
+            // Wire-proven 2026-10-15: `ps` is REQUIRED — omitting it (the trapped-binary
+            // decode's "no ps" reading) answers ec=-80001 "Protocols are invalid" live.
             "ps" to protocols,
             "u" to username,
         ),

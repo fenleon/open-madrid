@@ -127,6 +127,10 @@ class GsaCpd(
         anisette[AnisetteHeaderProvider.DEVICE_ID]?.let { put(AnisetteHeaderProvider.DEVICE_ID, it) }
     }
 
+    /** The set's `X-Apple-I-Client-Time` value (this mint's frozen time) — the delegate
+     *  sign-in reuses it (the accepted wire carries one Client-Time session-wide). */
+    fun clientTime(): String? = anisette[AnisetteHeaderProvider.CLIENT_TIME]
+
     companion object {
         /** The anisette header names the §1.5 cpd carries as keys (values from the provider). */
         val ANISETTE_KEYS = listOf(

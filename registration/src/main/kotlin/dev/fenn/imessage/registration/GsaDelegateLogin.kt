@@ -164,7 +164,7 @@ class GsaDelegateLoginClient(
         // endpoint's verdict is ICLOUD_INVALID_DEVICE_TOKEN — the fabricated sha256(keychain-id)
         // form is the prime suspect for the 400. GSA keeps its recorded set (rev 15).
         val anisette = if (prefpane) {
-            request.anisette
+            val mapped = request.anisette
                 .filterKeys { !it.equals("X-Apple-I-MD-LU", true) }
                 // The accepted prefpane request's exact wire casing (live capture 2026-10-14,
                 // captures/c56k/mint-repro/ob-req-002.bin): real AuthKit sends mixed-case
@@ -176,9 +176,12 @@ class GsaDelegateLoginClient(
                 mapOf(
                     "X-Apple-Locale" to "en_US",
                     "X-Apple-I-Timezone" to "UTC",
-                    // fresh per request, the get_headers Z form (capture 2026-10-14)
-                    "X-Apple-I-Client-Time" to iso8601Z(System.currentTimeMillis()),
                 )
+            // Client-Time rides the supplied set when it carries one — the LOGIN RUN's
+            // frozen mint (the accepted wire reuses ONE anisette set session-wide,
+            // 2026-10-15 decode); fresh only when the caller minted none.
+            if (mapped.keys.any { it.equals("X-Apple-I-Client-Time", true) }) mapped
+            else mapped + ("X-Apple-I-Client-Time" to iso8601Z(System.currentTimeMillis()))
         } else {
             request.anisette
         }
