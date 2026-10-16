@@ -105,11 +105,11 @@ data class RegisterUser(
     val ktLoggableData: ByteArray?,
 ) {
     fun toDict(): Map<String, Any?> = buildMap {
-        put("user-id", userId)
-        put("uris", uris)
         put("client-data", clientData)
-        tag?.let { put("tag", it) }
         ktLoggableData?.let { put("kt-loggable-data", it) }
+        put("uris", uris)
+        put("user-id", userId)
+        tag?.let { put("tag", it) }
     }
 }
 
@@ -205,9 +205,9 @@ data class RegisterBody(
         "hardware-version" to hardwareVersion,
         "language" to language,
         "os-version" to osVersion,
-        "software-version" to softwareVersion,
         "private-device-data" to privateDeviceData.toDict(),
         "services" to services.map { it.toDict() },
+        "software-version" to softwareVersion,
         "validation-data" to validationData,
     )
 
@@ -333,6 +333,9 @@ class IdsRegistrar(
         headers[PROTOCOL_VERSION_HEADER] = config.protocolVersion
         headers[USER_AGENT_HEADER] = config.userAgent
         headers["content-encoding"] = "gzip"
+        // The reference's register sets BOTH directions of the encoding ([rustpush:ids/user.rs
+        // register]: `content-encoding: gzip` + `accept-encoding: gzip`).
+        headers["accept-encoding"] = "gzip"
         val response = http.post(url, headers, gzipped, CONTENT_TYPE)
         if (response.status != 200) throw IdsActivationException("POST $url → HTTP ${response.status}")
         return parseResponse(gunzipIfNeeded(response.body))

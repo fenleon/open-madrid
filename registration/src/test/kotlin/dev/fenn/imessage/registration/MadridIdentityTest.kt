@@ -96,7 +96,7 @@ class MadridIdentityTest {
 
     @Test
     fun clientDataCarriesIdentityPlusCapturedStatics() {
-        val data = MadridIdentity.clientData(identity, 1_760_000_000L)
+        val data = RegisterServiceCatalog.MADRID.clientData(identity, identity.prekeyData(1_760_000_000L))
         assertTrue(data["public-message-identity-key"] is ByteArray)
         assertEquals(2L, data["public-message-identity-version"])
         assertEquals(1.0, data["ec-version"])

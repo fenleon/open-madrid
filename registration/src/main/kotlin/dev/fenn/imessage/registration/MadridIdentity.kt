@@ -116,7 +116,6 @@ class MadridIdentity(
             "supports-people-request-messages-v3" to true,
             "supports-rem" to true,
             "nicknames-version" to 1.0,
-            "ec-version" to 1.0,
             "supports-cross-platform-sharing" to true,
             "supports-original-timestamp-v1" to true,
             "supports-sa-v1" to true,
@@ -139,19 +138,38 @@ class MadridIdentity(
             "supports-polls" to true,
         )
 
-        /** The identity-key base keys that ride before [CLIENT_DATA] (§1.4 client-data). */
-        fun clientData(identity: MadridIdentity, prekeyTimestampEpochSeconds: Long): Map<String, Any?> {
-            val base: LinkedHashMap<String, Any?> = linkedMapOf(
-                "public-message-identity-key" to identity.identityKeyDer(),
-                "public-message-identity-version" to 2L,
-                "ec-version" to 1.0,
-                "public-message-identity-ngm-version" to 13L,
-                "public-message-ngm-device-prekey-data-key" to identity.prekeyData(prekeyTimestampEpochSeconds),
-                "kt-version" to 5L,
-            )
-            base.putAll(CLIENT_DATA)
-            return base
-        }
+        /**
+         * The six identity keys that open every service's `client-data` (§1.4) — no capability
+         * keys: the ones beyond these are per service and come from [RegisterServiceCatalog]
+         * (madrid's are [CLIENT_DATA]). [ecVersion] is capture-bound per service: madrid sends
+         * the REAL 1.0, the other three send the INTEGER 1L — the plist distinguishes them, so
+         * this is `Any`.
+         */
+        fun clientData(
+            identity: MadridIdentity,
+            prekeyTimestampEpochSeconds: Long,
+            ecVersion: Any = 1.0,
+        ): Map<String, Any?> = clientData(identity, identity.prekeyData(prekeyTimestampEpochSeconds), ecVersion)
+
+        /**
+         * The same dict with a caller-minted [prekeyBlob]. The reference mints the prekey ONCE,
+         * outside the service loop, and clones the same bytes into every service's `client-data`
+         * (`rustpush/src/ids/user.rs:982`) — every fresh mint is a fresh ECDSA signature, so
+         * minting per service would put four different blobs in one body. Callers registering
+         * more than one service pass one blob to all of them ([RegisterServiceCatalog.services]).
+         */
+        fun clientData(
+            identity: MadridIdentity,
+            prekeyBlob: ByteArray,
+            ecVersion: Any = 1.0,
+        ): Map<String, Any?> = linkedMapOf(
+            "public-message-identity-key" to identity.identityKeyDer(),
+            "public-message-identity-version" to 2L,
+            "ec-version" to ecVersion,
+            "public-message-identity-ngm-version" to 13L,
+            "public-message-ngm-device-prekey-data-key" to prekeyBlob,
+            "kt-version" to 5L,
+        )
 
         fun generate(): MadridIdentity = MadridIdentity(
             signing = keyPair("EC", 256),
