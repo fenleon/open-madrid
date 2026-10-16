@@ -307,8 +307,8 @@ data class IdsRegisterResponse(
 /**
  * IDS register client per spec §1.4: POST the XML-plist body to the bag's `id-register` URL,
  * signed once with the push key and once per user with that user's auth key (§1.4's indexed
- * header sets). The body goes out with the recorded content type and no gzip — the
- * gzip-vs-plain disagreement is C3 and the un-gzipped variant is the lower-assumption one.
+ * header sets). The body goes out gzipped with the recorded content type — capture + rustpush
+ * parity (C3 resolved).
  *
  * [refreshCredentialsMarker] is the §6.1 "refresh credentials" status string — capture-bound,
  * so caller-supplied. With it unset (the default), any string-valued per-user/per-service
@@ -324,10 +324,16 @@ class IdsRegistrar(
     suspend fun register(body: RegisterBody): IdsRegisterResponse {
         val url = bag.url(BAG_KEY)
         val encoded = XmlPlist.encode(body.toDict())
-        val headers = signatureHeaders(encoded, body.users)
+        // C3 resolved by capture: the recorded reference gzips the register body
+        // (`content-encoding: gzip`, [rustpush:gzip_normal]).
+        val gzipped = ByteArrayOutputStream().also { body ->
+            GZIPOutputStream(body).use { it.write(encoded) }
+        }.toByteArray()
+        val headers = signatureHeaders(gzipped, body.users)
         headers[PROTOCOL_VERSION_HEADER] = config.protocolVersion
         headers[USER_AGENT_HEADER] = config.userAgent
-        val response = http.post(url, headers, encoded, CONTENT_TYPE)
+        headers["content-encoding"] = "gzip"
+        val response = http.post(url, headers, gzipped, CONTENT_TYPE)
         if (response.status != 200) throw IdsActivationException("POST $url → HTTP ${response.status}")
         return parseResponse(gunzipIfNeeded(response.body))
     }

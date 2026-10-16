@@ -630,7 +630,8 @@ $inner</Protocol>""".toByteArray()
         }
         require(headers["x-auth-user-id-0"] == profileId) { "x-auth-user-id-0 is not the profile id (§1.4)" }
 
-        val request = Plist.parse(body) as? Map<*, *> ?: throw IllegalStateException("register body is not a plist (§1.4)")
+        require(headers["content-encoding"] == "gzip") { "register body is not gzipped (§1.4 capture parity)" }
+        val request = Plist.parse(gunzip(body)) as? Map<*, *> ?: throw IllegalStateException("register body is not a plist (§1.4)")
         // §1.4: exactly the eight recorded top-level keys, none beyond.
         require(request.keys == setOf(
             "device-name", "hardware-version", "language", "os-version", "software-version",

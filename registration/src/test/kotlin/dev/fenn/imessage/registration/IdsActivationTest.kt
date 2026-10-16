@@ -150,7 +150,7 @@ class IdsActivationTest {
         val http = ScriptedIdsHttp(listOf(IdsHttpResponse(200, emptyMap(), okResponse())))
         registrar(http).register(body())
 
-        val decoded = Plist.parse(http.calls.single().body) as Map<*, *>
+        val decoded = Plist.parse(gunzipIfNeeded(http.calls.single().body)) as Map<*, *>
         assertEquals(
             setOf(
                 "device-name", "hardware-version", "language", "os-version", "software-version",
@@ -171,7 +171,7 @@ class IdsActivationTest {
         val http = ScriptedIdsHttp(listOf(IdsHttpResponse(200, emptyMap(), okResponse())))
         registrar(http).register(body())
 
-        val decoded = Plist.parse(http.calls.single().body) as Map<*, *>
+        val decoded = Plist.parse(gunzipIfNeeded(http.calls.single().body)) as Map<*, *>
         val service = (decoded["services"] as List<*>).single() as Map<*, *>
         assertEquals(setOf("capabilities", "service", "sub-services", "users"), service.keys)
         assertEquals("com.apple.madrid", service["service"])
@@ -197,7 +197,7 @@ class IdsActivationTest {
         val http = ScriptedIdsHttp(listOf(IdsHttpResponse(200, emptyMap(), okResponse())))
         registrar(http).register(body())
 
-        val decoded = Plist.parse(http.calls.single().body) as Map<*, *>
+        val decoded = Plist.parse(gunzipIfNeeded(http.calls.single().body)) as Map<*, *>
         assertEquals(
             mapOf(
                 "ap" to "0",
