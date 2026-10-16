@@ -8,7 +8,7 @@ Verified against Apple:
 
 - **Registration**
 - **Bags and TLS**
-- **ADI/anisette** 
+- **ADI/anisette chain** 
 - **The validation endpoints**
 
 Not yet (as of 16.10.2026):
