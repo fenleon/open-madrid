@@ -6,7 +6,7 @@ An open implementation of Apple's madrid protocol (iMessage) in Kotlin: the bina
 
 Verified against Apple:
 
-- **Registration** — Albert activation, full GSA sign-in (SRP, trusted-device 2FA, PET delivery), IDS authenticate and register all ran live (2026-10-02→04); the registered handle stayed active.
+- **Registration** — Albert activation, full GSA sign-in (SRP, trusted-device 2FA, PET delivery), IDS authenticate and register all ran live (2026-10-02→04); the registered handle stayed active. **The full chain completed end to end live (2026-10-16)**: silent persisted-identity re-login → postdata device-trust event → the prefpane delegate sign-in (`/setup/prefpane/loginDelegates`) → activation → authenticate → register, driving a real registered session.
 - **Bags and TLS** — both bag endpoints return plists these parsers handle; certificate pinning validates Apple's real chains. A drift check ships with the repo (`:engine:runProbe`).
 - **ADI/anisette** — the white-box ciphers, the GSA provisioning exchange, the spim/cpim/ptm wire framing, and the validation-stamp ("NAC") mint are reimplemented in Kotlin, clean-room, byte-exact against live captures. The full 517-byte stamp computes from its inputs; `NacMint` is the public facade. No anisette server, no Unicorn, no Mac relay.
 - **The validation endpoint's `5003 EM` error is solved** (spec rev 38): it fingerprints the TLS handshake and only accepts rustls-shaped clients. Proven by posting fresh, never-seen blobs minted by the reference client itself — accepted over rustls, rejected byte-for-byte identically over OpenSSL, BoringSSL, and the JVM stacks. Kotlin code and framing were never wrong. JVM consumers need a small rust transport (reqwest + rustls, two functions) for the two validation calls; the private imessage tool in this org carries the reference implementation.
@@ -14,6 +14,10 @@ Verified against Apple:
 Not yet:
 
 - No message send or receive over the courier; renewal across sessions untested.
+- The self-minted validation stamp is the last gap: a genuine fresh stamp through the
+  whole chain passes the prefpane while our minted one (also 517 bytes, structurally
+  identical) is rejected — a byte-level A/B (2026-10-15/16) pinned the defect to the
+  `rng_pad130` link of the scrambleBody mint. Fix tracked in the spec's open questions.
 - Crypto envelopes have round-trip tests but no known-answer vectors from a live device.
 - A few wire details are capture-bound guesses, tracked in the spec's open-questions checklist.
 - PQ3 unsupported.
