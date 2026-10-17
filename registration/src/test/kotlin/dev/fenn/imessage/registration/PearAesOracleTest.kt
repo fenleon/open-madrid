@@ -7,8 +7,12 @@ import kotlin.test.assertTrue
 /** Session-40: the Kotlin decryptCbc against the .so's own live oracle session. */
 class PearAesOracleTest {
 
-    private fun res(name: String): ByteArray =
-        javaClass.classLoader!!.getResourceAsStream("imessage/$name")!!.readBytes()
+    private fun res(name: String): ByteArray = when (name) {
+        "oracle-estkey-arg.bin" -> PearOracleVectors.estkeyarg
+        "oracle-estkey-ret.bin" -> PearOracleVectors.estkeyret
+        "oracle-sessinfo.bin" -> PearOracleVectors.sessinfo
+        else -> PearOracleVectors.body576
+    }
 
     @Test
     fun establishKeyMatchesTheSo() {
