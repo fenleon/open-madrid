@@ -10,8 +10,8 @@ No Maven repository yet — the fastest route is [JitPack](https://jitpack.io/#f
 repositories { maven("https://jitpack.io") }
 
 dependencies {
-    implementation("com.github.fenleon.open-madrid:registration:v0.1.0")
-    implementation("com.github.fenleon.open-madrid:engine:v0.1.0")
+    implementation("com.github.fenleon.open-madrid:registration:v0.2.0")
+    implementation("com.github.fenleon.open-madrid:engine:v0.2.0")
 }
 ```
 
@@ -24,11 +24,12 @@ The NAC stamp is what an Apple validation endpoint wants as proof of hardware id
 ```kotlin
 // step 2: POST a NacRequestBlob, get session-info back
 val pearKey16 = SecureRandom().generateSeed(16)
-val blob = NacRequestBlob.build(certChain.last(), pearKey16, SecureRandom())
+val (blob, establishSeed16) = NacRequestBlob.buildWithSeed(certChain.last(), pearKey16, SecureRandom())
 val sessionInfo = certClient.initializeValidation(blob)
 
-// key establishment + the stamp
-val established = NacMint.keyEstablishmentFull(sessionInfo, pearKey16)
+// key establishment + the stamp — the reply keys under establishKey(S-BOX(establishSeed16)),
+// the same 16 bytes the blob carries in its field32 (v0.2.0: NOT the OAEP'd pearKey16)
+val established = NacMint.keyEstablishmentFull(sessionInfo, establishSeed16)
 val stamp = NacMint.mint(
     cert79 = established.trailing.copyOfRange(0, 79),
     session250 = HardwareConfiguration.from(identifiers).toBin(),
