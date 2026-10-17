@@ -6,7 +6,7 @@ An open implementation of Apple's madrid protocol (iMessage) in Kotlin: the bina
 
 Verified against Apple:
 
-- **Registration** — the full §1.1→§1.4 chain (validation-data mint → authenticate → register) succeeds with the library's own stamp (2026-10-17, exercised end-to-end on-device)
+- **The full Registration chain**
 - **Bags and TLS**
 - **ADI/anisette chain** 
 - **The validation endpoints**
@@ -17,11 +17,6 @@ Not yet (as of 17.10.2026):
 - Crypto envelopes have round-trip tests but no known-answer vectors from a live device.
 - A few wire details are capture-bound guesses, tracked in the spec's open-questions checklist.
 - PQ3 unsupported.
-
-The 2026-10-17 milestone: the last stamp gap is closed. The EstablishKeyResponse keys
-under `establish_key(S-BOX(draw))` where the draw is the 16 client bytes riding the
-request blob's field32 plaintext (`plain32[5:21]`) — established by hardware-watchpoint
-proof against the reference client and confirmed by a live register with our own mint.
 
 ## Why another project?
 
