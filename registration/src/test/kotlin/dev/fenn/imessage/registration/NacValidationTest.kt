@@ -76,12 +76,29 @@ class NacValidationTest {
         assertContentEquals(expected, stamp)
     }
 
+    /** The pre-2026-10-17 model vectors were computed under establishKey(K); the API now
+     *  keys under establishKey(SBOX(seed)), so the equivalent seed is SBOX⁻¹(K). */
+    private fun seedForModelKey(pearKey: ByteArray): ByteArray {
+        val sbox = PearTables.nacSbox
+        val inv = ByteArray(256).also { i -> for (v in 0 until 256) i[sbox[v].toInt() and 0xff] = v.toByte() }
+        return ByteArray(16) { inv[pearKey[it].toInt() and 0xff] }
+    }
+
+    @Test
+    fun nacSboxMatchesLiveDraw() {
+        // 2026-10-17 live watchpoint run: ValidationCtx::new's draw -> SBOX -> ctx[0x30],
+        // and the EstablishKeyResponse decrypts to 0240 under establishKey of exactly this.
+        val draw = hex("21a2f79df05b1eb8f6b4c82a66caf158")
+        val x = ByteArray(16) { PearTables.nacSbox[draw[it].toInt() and 0xff] }
+        assertContentEquals(hex("b79cbbe8f575c3b0fb03cf4ae02eb5d4"), x)
+    }
+
     @Test
     fun keyEstablishmentMatchesModel() {
         val pearKey = hex("aebfc2884fd1e6ffdc60273be5756ff5")
         val sessionInfo = hex("021b0e89cab86b89c2911da5bbf6f475e3000002502feb2054e4786cfb482f083fb085cb87e0906991e2003bb2a45b65ecf9764d2c39bafe46cdd93600af6d1af6f27999fb275eacc6b6663b075be0bee9fc04e4018899a0e028954cd0f74a51d3c353a1b711ec431974926847dc715d71918f43d424a0c8ea663034699e704306c3c25ab7fa76e3e99a8944a6c1916204bb923e41218232ccc2d4df2658f96bad8f1e4e8e41c20a159de8485e1ec398ea86d1ef9f036d3c92d103500f9be66718c503c18d6cf724909a7e29da398a6b360b56511c034a437483612b5ee1f1fcdb582e0e9a6de81e306542beac6e96c89faa1eb43324b7051598bac4c7e2542542a0bfd6704152a187fe61623b0fdd9ec67105b22190c4b06b68c66a1ddd972ef6e23b269e128a21d9f36c0f0ca1422f4ea90bb1b7e6c5f32d524bd38beaffe99af5ad573fe7a07f3f20094adb6aa281b95e3a20fd6b7489c8d231d94287165e425de90ce4bf0a21cf523146fb0e1dac3c942eb40f75db11b3edd853975f37851adcb8883eac8952d8ad8232d17910ffcd8524167d7c14034b19e3c4a28266d45569384c5d2591333b46a542981ef4ed16e57979170276e079efecf83ec517b12ffa8cf6968d0d7ffb4c15422a6ca034d93096311bfdb724ea37155a2b8923d2bd8eb270b378f528ffd694c0a822bfe1c3016853c6474bada51f519e440f68df4589b377e36f19f839b8fa4965836d75135a5fc7dde8e083652a692cf0e2236e23044e20703d46ac3535ad2e084289c94c4e46c2220fd53e72d5ecba1baab23063544b03c01fb37160e2f2b7878ca58e55944f879c8e5a3feb6ae035cd16a4ec555c28fd73f5aa154e8aa0ce47fb96a0bc18f382bf7101638d563bfe2bd7a7d7ebc4284087ad43556ee2b6ba3973ea044d300d79d2a96dafe22e5fd1b1cfbab9cc5ccc19cd653b689b3a409882eb3441654852a593e128262806")
         val expected = hex("b935834c7d6a709f3b276fc3e0e4fc7dc5206bc6dc1bed36fbc50a49a227a2bfd6e413e93c47343eb0bd86f1870d10a67d162e3bd45536193adfb75fd939b26d2a3bceda6b3393f9a3d21616cc4a47e8001fad359a6121ed07c18bfc0910ded04311daec6c3c0419a1636eb0e49b5bd8c66705d1edc6f30b4b4e611dc1347496e221b42fbc13d7363be6b994dba12a30d43e0d3b80123a4802276ac368fdba5128916b9cf2db773adc86dd2d3f07b1698c53da2216d73c0da7084a94066b9c3be8e90f92da6af7ceaa4ed315649ed37d47d6b7c198e6214660b120a3bb7b63f6656f5757e9990dd298d6411be077d6a5b132acb9a2da3fe43c9fafe9b099d6f2ae6e21f6250938e83f86544f750df1f248c289d8598970edee01304890d3adeb15bda82e36ac4f36e64fd9e950b38018b8c659072754c9b5baef91445e04afa3fbc72123a6d78ca16b5aad184555fe01682fa456adc699fd88a88fedd779680c076e9f88d72ff307e2a2ad6fc1f5b25fb8d3fdf0b73db3bce19e2a329fff7ee248ae1d30b823197ad2793b17e6db7652cc29206131ba382102a92d32bdd8c3ebdf2de8c040cd0ca24870409be2d301ed8aadb35303dd21efdc30c3168c0bc887a05824aa6e16ba5cf8cc75a93c54945b9e758c4813f54bc4d5c4654cc9fdc6843114af607ec22e8cb9d9b97ab33c8ca5cc9230c96dee22a242aab0ec8bd83e1fad1dd4f4e42d550a95f0daa08708465c6f1ead67ff046c9df1a14f35cf8ccf1078ec246226f4fdc34c8fc6c32a21d8a211bc489e5cd735074f838d917617399ccfb60a8e7d4db3dc1de397bba7aacd66")
-        val pt = NacValidation.keyEstablishment(sessionInfo, pearKey)
+        val pt = NacValidation.keyEstablishment(sessionInfo, seedForModelKey(pearKey))
         assertContentEquals(expected, pt)
         assertEquals(592, pt.size)
     }
@@ -93,8 +110,8 @@ class NacValidationTest {
         // whose first 0x4f bytes are the mint's cert79
         val pearKey = hex("aebfc2884fd1e6ffdc60273be5756ff5")
         val sessionInfo = hex("021b0e89cab86b89c2911da5bbf6f475e3000002502feb2054e4786cfb482f083fb085cb87e0906991e2003bb2a45b65ecf9764d2c39bafe46cdd93600af6d1af6f27999fb275eacc6b6663b075be0bee9fc04e4018899a0e028954cd0f74a51d3c353a1b711ec431974926847dc715d71918f43d424a0c8ea663034699e704306c3c25ab7fa76e3e99a8944a6c1916204bb923e41218232ccc2d4df2658f96bad8f1e4e8e41c20a159de8485e1ec398ea86d1ef9f036d3c92d103500f9be66718c503c18d6cf724909a7e29da398a6b360b56511c034a437483612b5ee1f1fcdb582e0e9a6de81e306542beac6e96c89faa1eb43324b7051598bac4c7e2542542a0bfd6704152a187fe61623b0fdd9ec67105b22190c4b06b68c66a1ddd972ef6e23b269e128a21d9f36c0f0ca1422f4ea90bb1b7e6c5f32d524bd38beaffe99af5ad573fe7a07f3f20094adb6aa281b95e3a20fd6b7489c8d231d94287165e425de90ce4bf0a21cf523146fb0e1dac3c942eb40f75db11b3edd853975f37851adcb8883eac8952d8ad8232d17910ffcd8524167d7c14034b19e3c4a28266d45569384c5d2591333b46a542981ef4ed16e57979170276e079efecf83ec517b12ffa8cf6968d0d7ffb4c15422a6ca034d93096311bfdb724ea37155a2b8923d2bd8eb270b378f528ffd694c0a822bfe1c3016853c6474bada51f519e440f68df4589b377e36f19f839b8fa4965836d75135a5fc7dde8e083652a692cf0e2236e23044e20703d46ac3535ad2e084289c94c4e46c2220fd53e72d5ecba1baab23063544b03c01fb37160e2f2b7878ca58e55944f879c8e5a3feb6ae035cd16a4ec555c28fd73f5aa154e8aa0ce47fb96a0bc18f382bf7101638d563bfe2bd7a7d7ebc4284087ad43556ee2b6ba3973ea044d300d79d2a96dafe22e5fd1b1cfbab9cc5ccc19cd653b689b3a409882eb3441654852a593e128262806")
-        val full = NacValidation.keyEstablishmentFull(sessionInfo, pearKey)
-        assertContentEquals(NacValidation.keyEstablishment(sessionInfo, pearKey), full.payload)
+        val full = NacValidation.keyEstablishmentFull(sessionInfo, seedForModelKey(pearKey))
+        assertContentEquals(NacValidation.keyEstablishment(sessionInfo, seedForModelKey(pearKey)), full.payload)
         assertEquals(85, full.trailing.size)
         assertContentEquals(
             sessionInfo.copyOfRange(sessionInfo.size - 85, sessionInfo.size),

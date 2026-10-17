@@ -78,14 +78,26 @@ internal object NacValidation {
      * and the plaintext is mapped through SDAT (0x2246f6). The plaintext (592 B live) is
      * the EstablishKeyResponse wire: [2:2+0x240] = the payload that becomes the ctx
      * body576 region ([0x40:0x280], wire-verified ×3 live); [0:2] = its header.
+     *
+     * The establish seed is NOT the OAEP'd pearKey16: ValidationCtx::new draws 16 fresh
+     * bytes (the same bytes that ride the request at plain32[5:21] — [NacRequestBlob]'s
+     * innerKey16), maps them through the S-BOX (0x2248f9) into ctx[0x30]
+     * (the 0x1794a29 loop → the 0x1794b16 store), and keys the reply under
+     * establish_key(ctx[0x30]) — create_rounds reads the 16 bytes at [0:16] of the key
+     * pointer (0x17b8ed4). The server recomputes the same value from the blob's field32.
+     * Watchpoint-proven 2026-10-17 (the ctx[0x30] write is a verbatim copy of new()'s
+     * value; SBOX(draw) == X byte-exact) and the reply decrypts to 0240 under
+     * establishKey(SBOX(draw)) on three fresh live establishments.
      */
-    internal fun keyEstablishmentFull(sessionInfo: ByteArray, pearKey16: ByteArray): Established {
-        require(pearKey16.size == 16) { "key_establishment: pear key must be 16 bytes" }
+    internal fun keyEstablishmentFull(sessionInfo: ByteArray, establishSeed16: ByteArray): Established {
+        require(establishSeed16.size == 16) { "key_establishment: establish seed must be 16 bytes" }
         require(sessionInfo.size >= 21) { "key_establishment: truncated EstablishResponse" }
         val key16 = sessionInfo.copyOfRange(1, 17)
         val bodyLen = u32be(sessionInfo, 17)
         require(sessionInfo.size >= 21 + bodyLen) { "key_establishment: body truncated" }
-        val rk = PearAes.establishKey(pearKey16)
+        val sbox = PearTables.nacSbox
+        val x16 = ByteArray(16) { sbox[establishSeed16[it].toInt() and 0xff] }
+        val rk = PearAes.establishKey(x16)
         val skey = PearTables.skey
         val iv = ByteArray(16) { skey[key16[it].toInt() and 0xff] }
         val ct = ByteArray(bodyLen) { skey[sessionInfo[21 + it].toInt() and 0xff] }
@@ -96,8 +108,8 @@ internal object NacValidation {
         return Established(pt, trailing)
     }
 
-    internal fun keyEstablishment(sessionInfo: ByteArray, pearKey16: ByteArray): ByteArray =
-        keyEstablishmentFull(sessionInfo, pearKey16).payload
+    internal fun keyEstablishment(sessionInfo: ByteArray, establishSeed16: ByteArray): ByteArray =
+        keyEstablishmentFull(sessionInfo, establishSeed16).payload
 
     private fun u32be(b: ByteArray, off: Int): Int =
         ((b[off].toInt() and 0xff) shl 24) or ((b[off + 1].toInt() and 0xff) shl 16) or

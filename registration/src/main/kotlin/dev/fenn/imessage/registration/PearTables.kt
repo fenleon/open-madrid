@@ -76,4 +76,10 @@ internal object PearTables {
     val blobFieldMap: ByteArray by lazy { bytesAt(15632, 256) }
     /** .rodata 0x224af9 — the §1.1 request blob's plaintext byte map (table[byte]). */
     val blobPayloadMap: ByteArray by lazy { bytesAt(15888, 256) }
+    /** .rodata 0x2248f9 — the reply-key S-BOX (2026-10-17 tail append, image offset 16144):
+     *  ValidationCtx::new draws 16 fresh bytes, writes nacSbox[draw] into ctx[0x30]
+     *  (the S-BOX loop at 0x1794a29 → store 0x1794b16), and key_establishment keys the
+     *  EstablishKeyResponse under establish_key(ctx[0x30]). The same draw rides the request
+     *  at plain32[5:21] (the payload-mapped field32), so the server recomputes it. */
+    val nacSbox: ByteArray by lazy { bytesAt(16144, 256) }
 }

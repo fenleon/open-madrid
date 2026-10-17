@@ -36,7 +36,11 @@ import javax.crypto.spec.SecretKeySpec
  * Role model: the server decrypts the OAEP → (pearKey16, hmacKey20), derives the PAESKey
  * from pearKey16, decrypts field32, and verifies the HMAC — a possession-of-pearKey16 proof
  * bound to the blob. Everything is minted locally: three fresh RNG draws plus the caller's
- * pearKey16 (the SAME pearKey16 the §1.1 key establishment consumes — [NacMint.keyEstablishmentFull]).
+ * pearKey16. The innerKey16 (plain32[5:21]) is ALSO the reply-key establish seed: the .so
+ * SBOXes it into ctx[0x30] and keys the EstablishKeyResponse under establishKey(SBOX(innerKey16))
+ * (proved 2026-10-17 — the draw was watchpoint-traced from new()'s sample through the S-BOX
+ * to the establish_key arg, and the same bytes sit encrypted in field32 where the server
+ * recovers them). [buildWithSeed] returns it; [NacMint.keyEstablishmentFull] consumes it.
  */
 object NacRequestBlob {
 
@@ -49,18 +53,48 @@ object NacRequestBlob {
     const val BLOB_BYTES = 338
     const val PEAR_KEY16_BYTES = 16
 
-    /** Builds the blob; [pearKey16] is returned-consumed by the §1.1 key establishment. */
+    /** Builds the blob; [pearKey16] is OAEP'd to the server and feeds init_key/field32. */
     fun build(certDer: ByteArray, pearKey16: ByteArray, random: SecureRandom): ByteArray {
         val certificate = java.security.cert.CertificateFactory.getInstance("X.509")
             .generateCertificate(certDer.inputStream())
         return build(certificate.publicKey, pearKey16, random)
     }
 
+    /** The blob plus the establish seed (the blob's innerKey16 — see [buildWithSeed]). */
+    fun buildWithSeed(
+        certDer: ByteArray,
+        pearKey16: ByteArray,
+        random: SecureRandom,
+    ): Pair<ByteArray, ByteArray> {
+        val certificate = java.security.cert.CertificateFactory.getInstance("X.509")
+            .generateCertificate(certDer.inputStream())
+        return buildWithSeed(certificate.publicKey, pearKey16, random)
+    }
+
     fun build(publicKey: PublicKey, pearKey16: ByteArray, random: SecureRandom): ByteArray =
         build(publicKey, pearKey16) { n -> ByteArray(n).also(random::nextBytes) }
 
+    fun buildWithSeed(
+        publicKey: PublicKey,
+        pearKey16: ByteArray,
+        random: SecureRandom,
+    ): Pair<ByteArray, ByteArray> =
+        buildWithSeed(publicKey, pearKey16) { n -> ByteArray(n).also(random::nextBytes) }
+
     /** Deterministic core (tests): every randomness draw routes through [draw]. */
-    internal fun build(publicKey: PublicKey, pearKey16: ByteArray, draw: (Int) -> ByteArray): ByteArray {
+    internal fun build(publicKey: PublicKey, pearKey16: ByteArray, draw: (Int) -> ByteArray): ByteArray =
+        buildWithSeed(publicKey, pearKey16, draw).first
+
+    /**
+     * Deterministic core returning the blob AND its establish seed: the innerKey16 this
+     * build placed at plain32[5:21] — the same 16 bytes the server recovers from field32
+     * and SBOXes into the reply key ([NacMint.keyEstablishmentFull] consumes the seed).
+     */
+    internal fun buildWithSeed(
+        publicKey: PublicKey,
+        pearKey16: ByteArray,
+        draw: (Int) -> ByteArray,
+    ): Pair<ByteArray, ByteArray> {
         require(pearKey16.size == PEAR_KEY16_BYTES) {
             "pearKey16 must be $PEAR_KEY16_BYTES bytes (got ${pearKey16.size})"
         }
@@ -104,7 +138,7 @@ object NacRequestBlob {
         blob[285] = 0x20 // u32be(32) — the field32 length marker
         field32.copyInto(blob, 286)
         tail.copyInto(blob, 318)
-        return blob
+        return Pair(blob, innerKey16)
     }
 
     private const val W16_OFFSET = 5

@@ -32,12 +32,12 @@ object NacMint {
     ): ByteArray = NacValidation.mint(cert79, session250, rngPad, rand16, body576)
 
     /** [NacValidation.keyEstablishment] — the SDAT-mapped EstablishKeyResponse wire. */
-    fun keyEstablishment(sessionInfo: ByteArray, pearKey16: ByteArray): ByteArray =
-        NacValidation.keyEstablishment(sessionInfo, pearKey16)
+    fun keyEstablishment(sessionInfo: ByteArray, establishSeed16: ByteArray): ByteArray =
+        NacValidation.keyEstablishment(sessionInfo, establishSeed16)
 
     /** [NacValidation.keyEstablishmentFull] — payload + the response's trailing Vec. */
-    fun keyEstablishmentFull(sessionInfo: ByteArray, pearKey16: ByteArray): Established =
-        NacValidation.keyEstablishmentFull(sessionInfo, pearKey16)
+    fun keyEstablishmentFull(sessionInfo: ByteArray, establishSeed16: ByteArray): Established =
+        NacValidation.keyEstablishmentFull(sessionInfo, establishSeed16)
 }
 
 /** The parsed key-establishment outcome (the ctx fields the mint consumes). */
